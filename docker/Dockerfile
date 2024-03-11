@@ -3,7 +3,7 @@ FROM python:3.12-slim-bookworm as builder
 COPY requirements.txt /tmp
 RUN \
     apt-get update && \
-    apt-get install -y build-essential git libpq-dev libmariadb-dev libffi-dev libssl-dev libcurl4-openssl-dev libpython3-dev rustc pkg-config
+    apt-get install -y build-essential git libpq-dev libmariadb-dev libffi-dev libssl-dev libcurl4-openssl-dev libsasl2-dev libldap2-dev libssl-dev libpython3-dev rustc pkg-config
 ENV CARGO_NET_GIT_FETCH_WITH_CLI true
 RUN \
     pip install --upgrade pip && \
