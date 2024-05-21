@@ -8,7 +8,6 @@ Please submit additions and corrections
 
 * [linuxserver/docker-healthchecks](https://github.com/linuxserver/docker-healthchecks) – Alternative Docker image
 * [galexrt/docker-healthchecks](https://github.com/galexrt/docker-healthchecks) – Alternative Docker image
-* [ansible-collections/community.healthchecksio](https://github.com/ansible-collections/community.healthchecksio) - Ansible modules for automating tasks on Healthchecks.io
 
 ## Command Runners, Shell Wrappers
 
@@ -19,9 +18,14 @@ Please submit additions and corrections
 
 ## API Wrappers
 
+### Ansible
+
+* [ansible-collections/community.healthchecksio](https://github.com/ansible-collections/community.healthchecksio) - Ansible modules for automating tasks on Healthchecks.io
+
 ### Go
 
 * [kristofferahl/go-healthchecksio](https://github.com/kristofferahl/go-healthchecksio) – Supports listing, creating, updating, deleting, pausing, pinging.
+* [gitlab.com/etke.cc/go/healthchecks](https://gitlab.com/etke.cc/go/healthchecks) – Supports pinging.
 
 ### PowerShell
 
@@ -31,6 +35,7 @@ Please submit additions and corrections
 
 * [samarpan-rai/healthchecks_wrapper](https://github.com/samarpan-rai/healthchecks_wrapper) – Python context manager, supports pinging.
 * [danidelvalle/healthchecks-decorator](https://github.com/danidelvalle/healthchecks-decorator) – Python context manager, supports pinging.
+* [andrewthetechie/py-healthchecks.io](https://github.com/andrewthetechie/py-healthchecks.io) – Supports creating, pinging. Has sync and async implementations.
 
 ### Rust
 

@@ -443,11 +443,23 @@ Default: `localhost`
 The domain to use for generating ping email addresses. Example:
 
 ```ini
-PING_EMAIL_DOMAIN=ping.my-hc.example.org
+PING_EMAIL_DOMAIN=hc.example.org
 ```
 
 In this example, Healthchecks would generate ping email addresses similar
-to `3f1a7317-8e96-437c-a17d-b0d550b51e86@ping.my-hc.example.org`.
+to `3f1a7317-8e96-437c-a17d-b0d550b51e86@hc.example.org`.
+
+This setting only controls how the ping email addresses are constructed, and
+does not by itself enable the ping-by-sending-email functionality. To receive
+emails, you will also need:
+
+* A DNS record pointing `hc.example.org` to your Healthchecks
+  instance's IP address.
+* `manage.py smtpd` (Healthchecks' SMTP listener service) running, listening
+  on port 25, and reachable from the outside world. If you are using the
+  [official Docker image](https://hub.docker.com/r/healthchecks/healthchecks),
+  see [the instructions here](../self_hosted_docker/#SMTPD_PORT) for enabling the SMTP
+  listener service.
 
 ## `PING_ENDPOINT` {: #PING_ENDPOINT }
 
@@ -792,7 +804,7 @@ The integration can work with or without the Slack Client ID. If
 the Slack Client ID is not set, in the "Integrations - Add Slack" page,
 Healthchecks will ask the user to provide a webhook URL for posting notifications.
 
-If the Slack Client _is_ set, Healthchecks will use the OAuth2 flow
+If the Slack Client ID _is_ set, Healthchecks will use the OAuth2 flow
 to get the webhook URL from Slack. The OAuth2 flow is more user-friendly.
 To set it up, go to [https://api.slack.com/apps/](https://api.slack.com/apps/)
 and create a _Slack app_. When setting up the Slack app, make sure to:

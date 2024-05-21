@@ -1,4 +1,7 @@
 $(function () {
+    var base = document.getElementById("base-url").getAttribute("href").slice(0, -1);
+    var favicon = document.querySelector('link[rel="icon"]');
+
     $("#edit-name").click(function() {
         $('#update-name-modal').modal("show");
         $("#update-name-input").focus();
@@ -112,6 +115,8 @@ $(function () {
 
                 if (document.title != data.title) {
                     document.title = data.title;
+                    var downPostfix = data.status == "down" ? "_down" : "";
+                    favicon.href = `${base}/static/img/favicon${downPostfix}.svg`;
                 }
             }
         });

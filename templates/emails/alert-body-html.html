@@ -2,7 +2,7 @@
 {% load hc_extras humanize %}
 
 <p>
-    "{{ check.name_then_code }}" is {{ check.status|upper }}.
+    "{{ check.name_then_code }}" is {{ flip.new_status|upper }}.
     <a href="{{ check.cloaked_url }}">View on {% site_name %}&hellip;</a>
 </p>
 
@@ -43,7 +43,7 @@
         {{ trtr|safe }} {% cycle trtr %}
         {% endif %}
 
-        {% if check.kind == "cron" %}
+        {% if check.kind == "cron" or check.kind == "oncalendar" %}
         <td style="padding-right: 32px; padding-bottom: 8px; vertical-align: top;">
             <b>Schedule</b><br>
             <code>{{ check.schedule }}</code>
@@ -58,7 +58,7 @@
 
         <td style="padding-right: 32px; padding-bottom: 8px; vertical-align: top;">
             <b>Total Pings</b><br>
-            {{ check.n_pings }}
+            {% if ping %}{{ ping.n }}{% else %}0{% endif %}
             {% if check.created %}(since {{ check.created|date:'M j, Y' }}){% endif %}
         </td>
     </tr>
@@ -103,9 +103,20 @@
         </td>
     </tr>
     {% endif %}
+
+    <tr>
+        <td style="padding-right: 32px; padding-bottom: 8px; vertical-align: top;">
+            <b>Status Changed to {{ flip.new_status|title }} at</b><br>
+            {{ flip.created|date:"Y-m-d H:i:s T" }}
+        </td>
+    </tr>
 </table>
 
 {% if ping and ping.has_body %}
+{% if subject %}
+<p><b>Last Ping Subject</b><br>{{ subject }}</p>
+{% endif %}
+
 <p><b>Last Ping Body</b></p>
 {% if body is None %}
 <p>

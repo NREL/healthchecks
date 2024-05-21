@@ -307,11 +307,23 @@ it altogether by setting this value to <code>None</code>.</p>
 <h2 id="PING_EMAIL_DOMAIN"><code>PING_EMAIL_DOMAIN</code></h2>
 <p>Default: <code>localhost</code></p>
 <p>The domain to use for generating ping email addresses. Example:</p>
-<div class="highlight"><pre><span></span><code><span class="na">PING_EMAIL_DOMAIN</span><span class="o">=</span><span class="s">ping.my-hc.example.org</span>
+<div class="highlight"><pre><span></span><code><span class="na">PING_EMAIL_DOMAIN</span><span class="o">=</span><span class="s">hc.example.org</span>
 </code></pre></div>
 
 <p>In this example, Healthchecks would generate ping email addresses similar
-to <code>3f1a7317-8e96-437c-a17d-b0d550b51e86@ping.my-hc.example.org</code>.</p>
+to <code>3f1a7317-8e96-437c-a17d-b0d550b51e86@hc.example.org</code>.</p>
+<p>This setting only controls how the ping email addresses are constructed, and
+does not by itself enable the ping-by-sending-email functionality. To receive
+emails, you will also need:</p>
+<ul>
+<li>A DNS record pointing <code>hc.example.org</code> to your Healthchecks
+  instance's IP address.</li>
+<li><code>manage.py smtpd</code> (Healthchecks' SMTP listener service) running, listening
+  on port 25, and reachable from the outside world. If you are using the
+  <a href="https://hub.docker.com/r/healthchecks/healthchecks">official Docker image</a>,
+  see <a href="../self_hosted_docker/#SMTPD_PORT">the instructions here</a> for enabling the SMTP
+  listener service.</li>
+</ul>
 <h2 id="PING_ENDPOINT"><code>PING_ENDPOINT</code></h2>
 <p>Default: <code>SITE_ROOT</code> + <code>/ping/</code></p>
 <p>The base URL to use for constructing ping URLs for display. Healthchecks constructs ping
@@ -547,7 +559,7 @@ it needs to construct absolute URLs.</p>
 <p>The integration can work with or without the Slack Client ID. If
 the Slack Client ID is not set, in the "Integrations - Add Slack" page,
 Healthchecks will ask the user to provide a webhook URL for posting notifications.</p>
-<p>If the Slack Client <em>is</em> set, Healthchecks will use the OAuth2 flow
+<p>If the Slack Client ID <em>is</em> set, Healthchecks will use the OAuth2 flow
 to get the webhook URL from Slack. The OAuth2 flow is more user-friendly.
 To set it up, go to <a href="https://api.slack.com/apps/">https://api.slack.com/apps/</a>
 and create a <em>Slack app</em>. When setting up the Slack app, make sure to:</p>

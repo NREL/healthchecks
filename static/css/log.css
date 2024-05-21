@@ -67,7 +67,7 @@
     width: 1%;
 }
 
-#log tr.ok td:nth-child(5) {
+#log td:nth-child(5) {
     width: 100%;
     max-width: 0;
 
@@ -75,15 +75,18 @@
     text-overflow: ellipsis;
 }
 
-#log tr.ok td:nth-child(5) code {
+#log td:nth-child(5) code {
     font-family: "Lucida Console", Monaco, monospace;
     font-size: 11.7px;
     color: var(--text-muted);
 }
 
+#log tr.flip {
+    background: var(--log-flip-bg);
+}
+
 #log tr.missing td {
-    color: #d9534f;
-    background: var(--log-missing-bg);
+    color: #a94442;
 }
 
 #log tr.missing td:nth-child(4) {
@@ -95,15 +98,15 @@
     text-overflow: ellipsis;
 }
 
-#log-slider {
-    margin-bottom: 60px;
+#end-formatted {
+    float: right;
 }
 
-#log-slider .noUi-connect {
-    background-color: var(--link-color);
+#end-help {
+    font-size: 12px;
+    line-height: 1;
 }
 
-#slider-from-formatted,
-#slider-to-formatted {
-    font-weight: bold;
+#filters hr {
+    margin: 10px;
 }

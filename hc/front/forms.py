@@ -381,20 +381,31 @@ class SearchForm(forms.Form):
     q = forms.RegexField(regex=r"^[0-9a-zA-Z\s]{3,100}$")
 
 
-class SeekForm(forms.Form):
+class LogFiltersForm(forms.Form):
     # min_value is 2010-01-01, max_value is 2030-01-01
-    start = forms.FloatField(min_value=1262296800, max_value=1893448800, required=False)
+    u = forms.FloatField(min_value=1262296800, max_value=1893448800, required=False)
     end = forms.FloatField(min_value=1262296800, max_value=1893448800, required=False)
+    success = forms.BooleanField(required=False)
+    fail = forms.BooleanField(required=False)
+    start = forms.BooleanField(required=False)
+    log = forms.BooleanField(required=False)
+    ign = forms.BooleanField(required=False)
+    notification = forms.BooleanField(required=False)
+    flip = forms.BooleanField(required=False)
 
-    def clean_start(self) -> datetime | None:
-        if self.cleaned_data["start"]:
-            return datetime.fromtimestamp(self.cleaned_data["start"], tz=timezone.utc)
+    def clean_u(self) -> datetime | None:
+        if self.cleaned_data["u"]:
+            return datetime.fromtimestamp(self.cleaned_data["u"], tz=timezone.utc)
         return None
 
     def clean_end(self) -> datetime | None:
         if self.cleaned_data["end"]:
             return datetime.fromtimestamp(self.cleaned_data["end"], tz=timezone.utc)
         return None
+
+    def kinds(self) -> tuple[str, ...]:
+        kind_keys = ("success", "fail", "start", "log", "ign", "notification", "flip")
+        return tuple(key for key in kind_keys if self.cleaned_data[key])
 
 
 class TransferForm(forms.Form):

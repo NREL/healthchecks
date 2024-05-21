@@ -1,9 +1,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime
 from datetime import timedelta as td
-from datetime import timezone
 from unittest.mock import Mock, patch
 
 from django.utils.timezone import now
@@ -15,7 +13,9 @@ from hc.test import BaseTestCase
 class LogTestCase(BaseTestCase):
     def setUp(self) -> None:
         super().setUp()
-        self.check = Check.objects.create(project=self.project)
+        self.check = Check(project=self.project)
+        self.check.created = "2000-01-01T00:00:00+00:00"
+        self.check.save()
 
         self.ping = Ping.objects.create(owner=self.check, n=1)
         self.ping.body_raw = b"hello world"
@@ -31,7 +31,6 @@ class LogTestCase(BaseTestCase):
         self.client.login(username="alice@example.org", password="password")
         r = self.client.get(self.url)
         self.assertContains(r, "Browser's time zone", status_code=200)
-        self.assertContains(r, "Found 1 ping event.")
         self.assertContains(r, "hello world")
 
     def test_it_displays_body(self) -> None:
@@ -91,44 +90,6 @@ class LogTestCase(BaseTestCase):
         r = self.client.get(self.url)
         self.assertEqual(r.status_code, 404)
 
-    def test_it_shows_email_notification(self) -> None:
-        ch = Channel(kind="email", project=self.project)
-        ch.value = json.dumps({"value": "alice@example.org", "up": True, "down": True})
-        ch.save()
-
-        Notification(owner=self.check, channel=ch, check_status="down").save()
-
-        self.client.login(username="alice@example.org", password="password")
-        r = self.client.get(self.url)
-        self.assertContains(r, "Sent email to alice@example.org", status_code=200)
-
-    def test_it_shows_pushover_notification(self) -> None:
-        ch = Channel.objects.create(kind="po", project=self.project)
-
-        Notification(owner=self.check, channel=ch, check_status="down").save()
-
-        self.client.login(username="alice@example.org", password="password")
-        r = self.client.get(self.url)
-        self.assertContains(r, "Sent a Pushover notification", status_code=200)
-
-    def test_it_shows_webhook_notification(self) -> None:
-        ch = Channel(kind="webhook", project=self.project)
-        ch.value = json.dumps(
-            {
-                "method_down": "GET",
-                "url_down": "foo/$NAME",
-                "body_down": "",
-                "headers_down": {},
-            }
-        )
-        ch.save()
-
-        Notification(owner=self.check, channel=ch, check_status="down").save()
-
-        self.client.login(username="alice@example.org", password="password")
-        r = self.client.get(self.url)
-        self.assertContains(r, "Called webhook foo/$NAME", status_code=200)
-
     def test_it_shows_ignored_nonzero_exitstatus(self) -> None:
         self.ping.kind = "ign"
         self.ping.exitstatus = 123
@@ -186,28 +147,3 @@ class LogTestCase(BaseTestCase):
         # The notification should not show up in the log as it is
         # older than the oldest visible ping:
         self.assertNotContains(r, "Sent email to alice@example.org", status_code=200)
-
-    def test_it_accepts_start_query_parameter(self) -> None:
-        dt = datetime(2020, 1, 1, tzinfo=timezone.utc)
-        ts = str(dt.timestamp())
-
-        self.client.login(username="alice@example.org", password="password")
-        r = self.client.get(self.url + "?start=" + ts)
-        self.assertContains(r, f'data-start="{ts}"', status_code=200)
-
-    def test_it_accepts_end_query_parameter(self) -> None:
-        dt = datetime(2020, 1, 1, tzinfo=timezone.utc)
-        ts = str(dt.timestamp())
-
-        self.client.login(username="alice@example.org", password="password")
-        r = self.client.get(self.url + "?end=" + ts)
-        self.assertContains(r, f'data-end="{ts}"', status_code=200)
-
-    def test_it_ignores_bad_time_filter(self) -> None:
-        self.ping.refresh_from_db()
-        smin = str(self.ping.created.timestamp())
-
-        for sample in ["surprise", "0"]:
-            self.client.login(username="alice@example.org", password="password")
-            r = self.client.get(self.url + "?start=" + sample)
-            self.assertContains(r, f'data-start="{smin}"', status_code=200)

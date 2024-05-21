@@ -5,6 +5,8 @@ from datetime import timedelta as td
 from datetime import timezone
 from unittest.mock import Mock, patch
 
+from django.test.utils import override_settings
+
 from hc.api.models import Check, Flip, Ping
 from hc.test import BaseTestCase
 
@@ -12,7 +14,7 @@ from hc.test import BaseTestCase
 class DetailsTestCase(BaseTestCase):
     def setUp(self) -> None:
         super().setUp()
-        self.check = Check.objects.create(project=self.project)
+        self.check = Check.objects.create(project=self.project, name="Foo")
 
         ping = Ping.objects.create(owner=self.check)
 
@@ -23,6 +25,7 @@ class DetailsTestCase(BaseTestCase):
 
         self.url = f"/checks/{self.check.code}/details/"
 
+    @override_settings(SITE_NAME="Mychecks")
     def test_it_works(self) -> None:
         self.client.login(username="alice@example.org", password="password")
         r = self.client.get(self.url)
@@ -30,6 +33,9 @@ class DetailsTestCase(BaseTestCase):
         self.assertContains(r, "ping-now")
         # The page should contain timezone strings
         self.assertContains(r, "Europe/Riga")
+
+        self.assertContains(r, "Foo – Mychecks", status_code=200)
+        self.assertContains(r, "favicon.svg")
 
     def test_it_suggests_tags_from_other_checks(self) -> None:
         self.check.tags = "foo bar"
@@ -146,7 +152,7 @@ class DetailsTestCase(BaseTestCase):
 
         # The summary for Jan. 2020 should be "1 downtime, 1 hour total"
         self.assertContains(r, "1 downtime, 1 h 0 min total")
-        self.assertContains(r, "99.8% uptime")
+        self.assertContains(r, "99.86% uptime")
 
     @patch("hc.lib.date.now")
     def test_it_downtime_summary_handles_plural(self, mock_now: Mock) -> None:
@@ -173,7 +179,7 @@ class DetailsTestCase(BaseTestCase):
         r = self.client.get(self.url)
 
         self.assertContains(r, "1 downtime, 2 h 0 min total")
-        self.assertContains(r, "99.7% uptime")
+        self.assertContains(r, "99.73% uptime")
 
     @patch("hc.lib.date.now")
     def test_downtime_summary_handles_positive_utc_offset(self, mock_now: Mock) -> None:
@@ -276,3 +282,13 @@ class DetailsTestCase(BaseTestCase):
 
         self.assertContains(r, 'data-timeout="123"')
         self.assertContains(r, 'data-grace="456"')
+
+    @override_settings(SITE_NAME="Mychecks")
+    def test_it_sets_title_and_favicon(self) -> None:
+        self.check.status = "down"
+        self.check.save()
+
+        self.client.login(username="alice@example.org", password="password")
+        r = self.client.get(self.url)
+        self.assertContains(r, "DOWN – Foo – Mychecks", status_code=200)
+        self.assertContains(r, "favicon_down.svg")

@@ -25,7 +25,7 @@ from django.contrib.auth.decorators import login_required
 from django.contrib.auth.models import User
 from django.core import signing
 from django.core.exceptions import PermissionDenied
-from django.db.models import Case, Count, F, QuerySet, When
+from django.db.models import Case, Count, F, Q, QuerySet, When
 from django.http import (
     Http404,
     HttpRequest,
@@ -51,6 +51,7 @@ from hc.api.models import (
     MAX_DURATION,
     Channel,
     Check,
+    Flip,
     Notification,
     Ping,
     TokenBucket,
@@ -75,7 +76,6 @@ STATUS_TEXT_TMPL = get_template("front/log_status_text.html")
 LAST_PING_TMPL = get_template("front/last_ping_cell.html")
 EVENTS_TMPL = get_template("front/details_events.html")
 DOWNTIMES_TMPL = get_template("front/details_downtimes.html")
-LOGS_TMPL = get_template("front/log_row.html")
 
 
 def _tags_counts(checks: Iterable[Check]) -> tuple[list[tuple[str, str, str]], int]:
@@ -373,9 +373,12 @@ def index(request: HttpRequest) -> HttpResponse:
     q = q.annotate(n_channels=Count("channel", distinct=True))
     q = q.annotate(owner_email=F("owner__email"))
     projects = list(q)
+    any_down = False
     for project in projects:
         setattr(project, "overall_status", summary[project.code]["status"])
         setattr(project, "any_started", summary[project.code]["started"])
+        if summary[project.code]["status"] == "down":
+            any_down = True
 
     # The list returned by projects() is already sorted . Do an additional sorting pass
     # to move projects with overall_status=down to the front (without changing their
@@ -386,6 +389,7 @@ def index(request: HttpRequest) -> HttpResponse:
         "page": "projects",
         "projects": projects,
         "last_project_id": request.session.get("last_project_id"),
+        "any_down": any_down,
     }
 
     return render(request, "front/projects.html", ctx)
@@ -481,7 +485,9 @@ def docs_search(request: HttpRequest) -> HttpResponse:
         LIMIT 8
     """
 
-    q = form.cleaned_data["q"]
+    # Wrap the query in double quotes to get a valid FTS string
+    # https://www.sqlite.org/fts5.html#full_text_query_syntax
+    q = '"%s"' % form.cleaned_data["q"]
     con = sqlite3.connect(settings.BASE_DIR / "search.db")
     cur = con.cursor()
     res = cur.execute(query, (q,))
@@ -845,16 +851,21 @@ def clear_events(request: AuthenticatedHttpRequest, code: UUID) -> HttpResponse:
 def _get_events(
     check: Check,
     page_limit: int,
-    start: datetime | None = None,
-    end: datetime | None = None,
-) -> list[Notification | Ping]:
+    start: datetime,
+    end: datetime,
+    kinds: tuple[str, ...] | None = None,
+) -> list[Notification | Ping | Flip]:
     # Sorting by "n" instead of "id" is important here. Both give the same
     # query results, but sorting by "id" can cause postgres to pick
     # api_ping.id index (slow if the api_ping table is big). Sorting by
     # "n" works around the problem--postgres picks the api_ping.owner_id index.
     pq = check.visible_pings.order_by("-n")
-    if start and end:
-        pq = pq.filter(created__gte=start, created__lte=end)
+    pq = pq.filter(created__gte=start, created__lte=end)
+    if kinds is not None:
+        kinds_filter = Q(kind__in=kinds)
+        if "success" in kinds:
+            kinds_filter = kinds_filter | Q(kind__isnull=True) | Q(kind="")
+        pq = pq.filter(kinds_filter)
 
     pings = list(pq[:page_limit])
 
@@ -874,10 +885,10 @@ def _get_events(
                 num_misses += 1
             else:
                 ping.duration = None
-                start = starts[ping.rid]
-                if start is not None:
-                    if ping.created - start < MAX_DURATION:
-                        ping.duration = ping.created - start
+                matching_start = starts[ping.rid]
+                if matching_start is not None:
+                    if ping.created - matching_start < MAX_DURATION:
+                        ping.duration = ping.created - matching_start
 
             starts[ping.rid] = None
 
@@ -887,64 +898,52 @@ def _get_events(
         for ping in pings:
             ping.duration = None
 
-    alerts: list[Notification]
-    q = Notification.objects.select_related("channel")
-    q = q.filter(owner=check, check_status="down")
-    if start and end:
-        q = q.filter(created__gte=start, created__lte=end)
-        alerts = list(q)
-    elif len(pings):
-        cutoff = pings[-1].created
-        q = q.filter(created__gt=cutoff)
-        alerts = list(q)
-    else:
-        alerts = []
+    alerts: list[Notification] = []
+    if kinds and "notification" in kinds:
+        aq = check.notification_set.order_by("-created")
+        aq = aq.filter(created__gte=start, created__lte=end, check_status="down")
+        aq = aq.select_related("channel")
+        alerts = list(aq[:page_limit])
 
-    events = pings + alerts
-    events.sort(key=lambda el: el.created, reverse=True)
-    return events
+    flips: list[Flip] = []
+    if kinds is None or "flip" in kinds:
+        fq = check.flip_set.order_by("-created")
+        fq = fq.filter(created__gte=start, created__lte=end)
+        flips = list(fq[:page_limit])
+
+    events = pings + alerts + flips
+    # Sort events by the timestamp.
+    # If timestamps are equal, put flips chronologically after pings
+    events.sort(key=lambda el: (el.created, isinstance(el, Flip)), reverse=True)
+    return events[:page_limit]
 
 
 @login_required
 def log(request: AuthenticatedHttpRequest, code: UUID) -> HttpResponse:
     check, rw = _get_check_for_user(request, code, preload_owner_profile=True)
 
+    smin = check.created
     smax = now()
-    smin = smax - td(hours=24)
-
     oldest_ping = check.visible_pings.order_by("n").first()
     if oldest_ping:
-        smin = min(smin, oldest_ping.created)
+        smin = max(smin, oldest_ping.created)
 
-    # Align slider steps to full hours
-    smin = smin.replace(minute=0, second=0)
-
-    form = forms.SeekForm(request.GET)
-    start, end = smin, smax
-    if form.is_valid():
-        if form.cleaned_data["start"]:
-            start = form.cleaned_data["start"]
-        if form.cleaned_data["end"]:
-            end = form.cleaned_data["end"]
-
-    # Clamp the _get_events start argument to the date of the oldest visible ping
-    get_events_start = start
-    if oldest_ping and oldest_ping.created > get_events_start:
-        get_events_start = oldest_ping.created
-
-    total = check.visible_pings.filter(created__gte=start, created__lte=end).count()
-    events = _get_events(check, 1000, start=get_events_start, end=end)
+    events = _get_events(check, 1000, start=smin, end=smax)
     ctx = {
         "page": "log",
         "project": check.project,
         "check": check,
         "min": smin,
         "max": smax,
-        "start": start,
-        "end": end,
         "events": events,
-        "num_total": total,
+        "oldest_ping": oldest_ping,
     }
+
+    if events:
+        # A full precision timestamp of the most recent event.
+        # This will be used client-side for fetching live updates to specify
+        # "return any events after *this* point".
+        ctx["last_event_timestamp"] = events[0].created.timestamp()
 
     return render(request, "front/log.html", ctx)
 
@@ -1069,7 +1068,7 @@ def status_single(request: AuthenticatedHttpRequest, code: UUID) -> HttpResponse
     check, rw = _get_check_for_user(request, code, preload_owner_profile=True)
 
     status = check.get_status()
-    events = _get_events(check, 20)
+    events = _get_events(check, 30, start=check.created, end=now())
     updated = "1"
     if len(events):
         updated = str(events[0].created.timestamp())
@@ -1296,16 +1295,22 @@ def send_test_notification(
     dummy.last_ping = now() - td(days=1)
     dummy.n_pings = 42
 
+    dummy_flip = Flip(owner=dummy)
+    dummy_flip.created = now()
+    dummy_flip.old_status = "up"
+    dummy_flip.new_status = "down"
+
     # Delete all older test notifications for this channel
     Notification.objects.filter(channel=channel, owner=None).delete()
 
     # Send the test notification
-    error = channel.notify(dummy, is_test=True)
+    error = channel.notify(dummy_flip, is_test=True)
 
     if error == "no-op":
         # This channel may be configured to send "up" notifications only.
-        dummy.status = "up"
-        error = channel.notify(dummy, is_test=True)
+        dummy_flip.old_status = "down"
+        dummy_flip.new_status = "up"
+        error = channel.notify(dummy_flip, is_test=True)
 
     if error:
         messages.warning(request, "Could not send a test notification. %s." % error)
@@ -1836,6 +1841,11 @@ def add_discord_complete(request: AuthenticatedHttpRequest) -> HttpResponse:
     result = curl.post("https://discordapp.com/api/oauth2/token", data)
 
     doc = result.json()
+    if isinstance(doc, dict) and doc.get("code") == 30007:
+        e = "maximum number of webhooks reached"
+        messages.warning(request, f"Response from Discord: {e}. Integration not added.")
+        return redirect("hc-channels", project.code)
+
     if not isinstance(doc, dict) or "access_token" not in doc:
         messages.warning(
             request,
@@ -2748,21 +2758,33 @@ def verify_signal_number(request: AuthenticatedHttpRequest) -> HttpResponse:
 @login_required
 def log_events(request: AuthenticatedHttpRequest, code: UUID) -> HttpResponse:
     check, rw = _get_check_for_user(request, code, preload_owner_profile=True)
-
-    form = forms.SeekForm(request.GET)
+    form = forms.LogFiltersForm(request.GET)
     if not form.is_valid():
         return HttpResponseBadRequest()
 
-    if form.cleaned_data["start"]:
-        start = form.cleaned_data["start"] + td(microseconds=1)
+    if form.cleaned_data["u"]:
+        # We are live-loading more events
+        start = form.cleaned_data["u"] + td(microseconds=1)
+        end = now()
     else:
+        # We're applying new filters
         start = check.created
+        end = form.cleaned_data["end"] or now()
 
-    html = ""
-    for event in _get_events(check, 1000, start=start, end=now()):
-        html += LOGS_TMPL.render({"event": event, "describe_body": True})
+    # clamp start to the date of the oldest visible ping
+    oldest_ping = check.visible_pings.order_by("n").first()
+    if oldest_ping:
+        start = max(start, oldest_ping.created)
 
-    return JsonResponse({"max": now().timestamp(), "events": html})
+    events = _get_events(check, 1000, start=start, end=end, kinds=form.kinds())
+    response = render(request, "front/log_rows.html", {"events": events})
+
+    if events:
+        # Include a full precision timestamp of the most recent event in a
+        # response header. This will be used client-side for fetching live updates
+        # to specify "return any events after *this* point".
+        response["X-Last-Event-Timestamp"] = str(events[0].created.timestamp())
+    return response
 
 
 # Forks: add custom views after this line

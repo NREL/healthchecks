@@ -185,8 +185,8 @@ def now_isoformat() -> str:
 
 
 @register.filter
-def timestamp(dt: datetime) -> float:
-    return dt.timestamp()
+def timestamp(dt: datetime) -> int:
+    return int(dt.timestamp())
 
 
 @register.filter
@@ -281,4 +281,4 @@ def fix_asterisks(s: str) -> str:
 
 @register.filter
 def pct(v: float) -> str:
-    return str(int(v * 1000) / 10)
+    return str(int(v * 10000) / 100)

@@ -15,6 +15,7 @@ from zoneinfo import ZoneInfo
 from cronsim import CronSim
 from django.conf import settings
 from django.contrib.auth.models import User
+from django.contrib.humanize.templatetags.humanize import naturaltime
 from django.core.mail import mail_admins
 from django.core.signing import TimestampSigner
 from django.db import models, transaction
@@ -528,7 +529,18 @@ class Check(models.Model):
             # may cause Postgres to use the "api_ping_pkey" index, and scan
             # a huge number of rows.
             ping = self.ping_set.earliest("created")
+
+            # Delete notifications older than the oldest retained ping
             self.notification_set.filter(created__lt=ping.created).delete()
+
+            # Delete flips older than the oldest retained ping *and*
+            # older than 93 days. We need ~3 months of flips for calculating
+            # downtime statistics. The precise requirement is
+            # "we need the current month and full two previous months of data".
+            # We could calculate this precisely, but 3*31 is close enough and
+            # much simpler.
+            flip_threshold = min(ping.created, now() - td(days=93))
+            self.flip_set.filter(created__lt=flip_threshold).delete()
         except Ping.DoesNotExist:
             pass
 
@@ -716,6 +728,12 @@ class Ping(models.Model):
                 return None
 
         return None
+
+    def formatted_kind_created(self) -> str:
+        """Return a string in "Success, 10 minutes" form."""
+        # xa0 is non-breaking spaces, we want regular spaces
+        created_str = naturaltime(self.created).replace("\xa0", " ")
+        return f"{self.get_kind_display()}, {created_str}"
 
 
 class WebhookSpec(BaseModel):
@@ -919,8 +937,8 @@ class Channel(models.Model):
         _, cls = TRANSPORTS[self.kind]
         return cls(self)
 
-    def notify(self, check: Check, is_test: bool = False) -> str:
-        if self.transport.is_noop(check):
+    def notify(self, flip: "Flip", is_test: bool = False) -> str:
+        if self.transport.is_noop(flip.new_status):
             return "no-op"
 
         n = Notification(channel=self)
@@ -929,15 +947,16 @@ class Channel(models.Model):
             # (the passed check is a dummy, unsaved Check instance)
             pass
         else:
-            n.owner = check
+            n.owner = flip.owner
 
-        n.check_status = check.status
+        n.check_status = flip.new_status
         n.error = "Sending"
         n.save()
 
         start, error, disabled = now(), "", self.disabled
         try:
-            self.transport.notify(check, notification=n)
+            self.transport.notify(flip, notification=n)
+
         except transports.TransportError as e:
             disabled = True if e.permanent else disabled
             error = e.message
@@ -1104,7 +1123,7 @@ class Channel(models.Model):
 
 
 class Notification(models.Model):
-    code = models.UUIDField(default=uuid.uuid4, null=True, editable=False)
+    code = models.UUIDField(default=uuid.uuid4, editable=False, unique=True)
     # owner is null for test notifications, produced by the "Test!" button
     # in the Integrations page
     owner = models.ForeignKey(Check, models.CASCADE, null=True)
@@ -1155,7 +1174,7 @@ class Flip(models.Model):
 
         * Exclude all channels for new->up and paused->up transitions.
         * Exclude disabled channels
-        * Exclude channels where transport.is_noop(check) returns True
+        * Exclude channels where transport.is_noop(status) returns True
         """
 
         # Don't send alerts on new->up and paused->up transitions
@@ -1166,7 +1185,7 @@ class Flip(models.Model):
             raise NotImplementedError(f"Unexpected status: {self.new_status}")
 
         q = self.owner.channel_set.exclude(disabled=True)
-        return [ch for ch in q if not ch.transport.is_noop(self.owner)]
+        return [ch for ch in q if not ch.transport.is_noop(self.new_status)]
 
 
 class TokenBucket(models.Model):

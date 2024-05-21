@@ -1,7 +1,24 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
-## v3.3-dev - Unreleased
+## v3.4-dev - Unreleased
+
+### Improvements
+- Show status changes (flips) in check's log page (#447)
+- Implement dynamic favicon in the projects overview page (#971)
+- Add support for system theme (#978, @moraj-turing)
+- Improve Opsgenie notifications (include description, schedule, link etc.)
+- Update the Discord integration to disable channel on HTTP 404 responses
+- Update email notifications to include the timestamps of status flips
+- Update the Sign In page to hide "Email Link" option if SMTP is not configured (#922)
+
+### Bug Fixes
+- Fix hc.front.views.docs_search to handle words "AND", "OR", "NOT" as queries
+- Fix integrations to not disclose check's code in incident data
+- Fix integrations to include oncalendar schedules in notifications
+- Fix a bug in the log page that caused log events to sometimes load twice
+
+## v3.3 - 2024-04-03
 
 ### Improvements
 - Add support for $NAME_JSON and $BODY_JSON placeholders in webhook payloads
@@ -9,10 +26,15 @@ All notable changes to this project will be documented in this file.
 - Add auto-refresh functionality to the Log page (#957, @mickBoat00)
 - Redesign the "Status Badges" page
 - Add support for per-check status badges (#853)
+- Add "Last ping subject" field in email notifications
+- Change the signup flow to accept registered users (and sign them in instead)
+- Implement event type filtering in the Log page (#873)
+- Implement dynamic favicon in the "Checks" and "Details" pages (#971, @princekhunt)
 
 ### Bug Fixes
 - Fix Gotify integration to handle Gotify server URLs with paths (#964)
 - Update notification templates to handle cases where check's last ping value is null
+- Make statsd metrics collection optional (to enable, set STATSD_HOST env var)
 
 ## v3.2 - 2024-02-09
 

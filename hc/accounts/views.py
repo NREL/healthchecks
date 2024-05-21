@@ -208,6 +208,7 @@ def login(request: HttpRequest) -> HttpResponse:
         "registration_open": settings.REGISTRATION_OPEN,
         "support_email": settings.SUPPORT_EMAIL,
         "account_closed": "account-closed" in request.GET,
+        "use_magic_form": bool(settings.EMAIL_HOST),
     }
     return render(request, "accounts/login.html", ctx)
 
@@ -234,11 +235,20 @@ def signup(request: HttpRequest) -> HttpResponse:
     form = forms.SignupForm(request)
     if form.is_valid():
         email = form.cleaned_data["identity"]
-        if not User.objects.filter(email=email).exists():
+        try:
+            user = User.objects.get(email=email)
+            # Sometimes existing users forget they already have an account.
+            # They use the signup form and are confused why no email arrives.
+            # To avoid this confusion, if we see the user account already exists,
+            # we will send them sign-in link even though they used the wrong form
+            # ("sign up" instead of "sign in").
+        except User.DoesNotExist:
+            # If the user does not exist, create a new user account.
             tz = form.cleaned_data["tz"]
             user = _make_user(email, tz)
-            profile = Profile.objects.for_user(user)
-            profile.send_instant_login_link()
+
+        profile = Profile.objects.for_user(user)
+        profile.send_instant_login_link()
     else:
         ctx = {"form": form}
 
@@ -711,6 +721,8 @@ def close(request: AuthenticatedHttpRequest) -> HttpResponse:
 @login_required
 def remove_project(request: AuthenticatedHttpRequest, code: str) -> HttpResponse:
     project = get_object_or_404(Project, code=code, owner=request.user)
+    for check in project.check_set.all():
+        check.lock_and_delete()
     project.delete()
     return redirect("hc-index")
 
@@ -931,7 +943,7 @@ def appearance(request: AuthenticatedHttpRequest) -> HttpResponse:
 
     if request.method == "POST":
         theme = request.POST.get("theme", "")
-        if theme in ("", "dark"):
+        if theme in ("", "dark", "system"):
             profile.theme = theme
             profile.save()
             ctx["status"] = "info"
