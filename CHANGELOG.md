@@ -1,7 +1,45 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
-## v3.4-dev - Unreleased
+## v3.6-dev - Unreleased
+
+### Improvements
+- Implement concurrent sending and `--num-workers` argument in `manage.py sendalerts`
+
+## v3.5.2 - 2024-08-21
+
+### Bug Fixes
+- Fix the Docker healthcheck script to supply correct Host header (#1051)
+
+## v3.5.1 - 2024-08-20
+
+### Bug Fixes
+- Fix the Dockerfile for building arm/v7 docker image
+
+## v3.5 - 2024-08-20
+
+Important: this Healthchecks release is using Django 5.1, which has dropped support
+for PostgreSQL 12. Therefore, the PostgreSQL image in the sample `docker-compose.yml`
+file has been updated from `postgres:12` to `postgres:16`. PostgreSQL does not
+automatically upgrade its data files between major version upgrades, you will need
+to do this manually. Instructions:
+https://github.com/healthchecks/healthchecks/tree/master/docker#upgrading-database
+
+### Improvements
+- Improve performance of loading ping body previews (#1023)
+- Implement MS Teams Workflows integration (#1024)
+- Add "uuid" field in API responses when read/write key is used (#1007)
+- Update timezone dropdowns to show frequently used timezones at the top
+- Update the "Set Password" page to reject very weak passwords
+- Implement search by slug in the checks list (#1048)
+- Add support for $SLUG placeholder in webhook payloads (#1049)
+- Update Dockerfile to use HEALTHCHECK instruction and report container health (#1045)
+
+### Bug Fixes
+- Fix Check.ping() to lock the check before updating (#1023)
+- Fix AJAX views to better handle user logging out
+
+## v3.4 - 2024-06-20
 
 ### Improvements
 - Show status changes (flips) in check's log page (#447)
@@ -11,6 +49,9 @@ All notable changes to this project will be documented in this file.
 - Update the Discord integration to disable channel on HTTP 404 responses
 - Update email notifications to include the timestamps of status flips
 - Update the Sign In page to hide "Email Link" option if SMTP is not configured (#922)
+- Update Slack integration to use channel name as the integration name (#1003)
+- Update Ping Details dialog to also show formatted datetimes (#975)
+- Add data migration to update legacy timezones to current canonical timezones
 
 ### Bug Fixes
 - Fix hc.front.views.docs_search to handle words "AND", "OR", "NOT" as queries

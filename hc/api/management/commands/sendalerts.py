@@ -1,92 +1,112 @@
 from __future__ import annotations
 
+import logging
 import signal
 import time
 from argparse import ArgumentParser
+from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import timedelta as td
 from io import TextIOBase
+from threading import BoundedSemaphore
 from types import FrameType
 from typing import Any
 
 from django.core.management.base import BaseCommand
-from django.db.models import F, Sum
+from django.db import close_old_connections
 from django.utils.timezone import now
 
 from hc.api.models import Check, Flip
 from hc.lib.statsd import statsd
 
+logger = logging.getLogger("hc")
 
-def notify(flip_id: int, stdout: TextIOBase) -> None:
-    flip = Flip.objects.get(id=flip_id)
-    check = flip.owner
+
+def notify(flip: Flip) -> str | None:
+    # First, mark the flip as processed:
+    q = Flip.objects.filter(id=flip.id, processed=None)
+    num_updated = q.update(processed=now())
+    if num_updated != 1:
+        # Nothing got updated: another sendalerts process got there first.
+        return None
 
     # Set or clear dates for followup nags
+    check = flip.owner
     check.project.update_next_nag_dates()
-
+    # Transport classes should use flip's status, not check's status
+    # (which can already be different by the time the notification goes out).
+    # To make sure we catch template bugs, set check's status to an obnoxious,
+    # invalid value:
+    check.status = "IF_YOU_SEE_THIS_WE_HAVE_A_BUG"
     channels = flip.select_channels()
     if not channels:
-        return
+        return None
 
-    # Set the historic status here but *don't save it*.
-    # It would be nicer to pass the status explicitly, as a separate parameter.
-    check.status = flip.new_status
-    # And just to make sure it doesn't get saved by a future coding accident:
-    setattr(check, "save", None)
-
-    # Send notifications
-    kinds = ", ".join([ch.kind for ch in channels])
-    stdout.write(f"{check.code} goes {check.status}, notifying via {kinds}\n")
     send_start = now()
+    logs = [f"{check.code} goes {flip.new_status}"]
     for ch in channels:
         notify_start = time.time()
         error = ch.notify(flip)
         secs = time.time() - notify_start
-        label = "ERR" if error else "OK"
-        s = " * %-3s %4.1fs %-10s %s %s\n" % (label, secs, ch.kind, ch.code, error)
-        stdout.write(s)
+        code8 = str(ch.code)[:8]
+        if error:
+            logs.append(f"  {code8} ({ch.kind}) Error in {secs:.1f}s: {error}")
+        else:
+            logs.append(f"  {code8} ({ch.kind}) OK in {secs:.1f}s")
 
     statsd.timing("hc.sendalerts.dwellTime", send_start - flip.created)
     statsd.timing("hc.sendalerts.sendTime", now() - send_start)
+    return "\n".join(logs)
 
 
 class Command(BaseCommand):
     help = "Sends UP/DOWN email alerts"
 
+    def __init__(self, *args: Any, **kwargs: Any):
+        super().__init__(*args, **kwargs)
+        self.executor = ThreadPoolExecutor(max_workers=10)
+        self.seats = BoundedSemaphore(10)
+        self.shutdown = False
+
     def add_arguments(self, parser: ArgumentParser) -> None:
         parser.add_argument(
-            "--no-loop",
-            action="store_false",
-            dest="loop",
-            default=True,
-            help="Do not keep running indefinitely. Process all due alerts, then exit.",
+            "--num-workers",
+            type=int,
+            dest="num_workers",
+            default=1,
+            help="The number of concurrent worker processes to use",
         )
 
-        parser.add_argument(
-            "--no-threads",
-            action="store_false",
-            dest="use_threads",
-            default=False,
-            help="Deprecated and ignored. Do not use.",
-        )
+    def on_notify_done(self, future: Future[str | None]) -> None:
+        close_old_connections()
+        self.seats.release()
+        if logs := future.result():
+            self.stdout.write(logs)
+
+        if exc := future.exception():
+            logger.error("Exception in notify", exc_info=exc)
+            raise exc
 
     def process_one_flip(self) -> bool:
-        """Find unprocessed flip, send notifications."""
+        """Find unprocessed flip, send notifications.
 
-        q = Flip.objects.filter(processed=None)
-        # Prioritize flips with low historic notification send times
-        q = q.annotate(last_duration_sum=Sum("owner__channel__last_notify_duration"))
-        q = q.order_by(F("last_duration_sum").asc(nulls_first=True))
-        flip = q.first()
+        Return True if the main loop should continue right away.
+
+        Return False if the main loop should  wait a bit before continuing.
+        (because either all workers are currently busy or there are currently no
+        unprocessed flips in the database).
+
+        """
+
+        if not self.seats.acquire(timeout=1):
+            return False  # Workers busy, main thread should wait a bit
+
+        flip = Flip.objects.filter(processed=None).first()
         if flip is None:
-            return False
+            self.seats.release()
+            return False  # No work found, main thread should wait a bit
 
-        q = Flip.objects.filter(id=flip.id, processed=None)
-        num_updated = q.update(processed=now())
-        if num_updated != 1:
-            # Nothing got updated: another worker process got there first.
-            return True
-
-        notify(flip.id, self.stdout)
+        f = self.executor.submit(notify, flip)
+        f.add_done_callback(self.on_notify_done)
         return True
 
     def handle_going_down(self) -> bool:
@@ -149,27 +169,27 @@ class Command(BaseCommand):
         self.stdout.write(f"{desc}, finishing...\n")
         self.shutdown = True
 
-    def handle(self, use_threads: bool, loop: bool, **options: Any) -> str:
-        self.shutdown = False
+    def handle(self, num_workers: int, **options: Any) -> str:
+        self.seats = BoundedSemaphore(num_workers)
+        self.executor = ThreadPoolExecutor(max_workers=num_workers)
+
         signal.signal(signal.SIGTERM, self.on_signal)
         signal.signal(signal.SIGINT, self.on_signal)
 
         self.stdout.write("sendalerts is now running\n")
-        sent = 0
         while not self.shutdown:
             # Create flips for any checks going down
-            while self.handle_going_down():
+            while self.handle_going_down() and not self.shutdown:
                 pass
 
-            if self.process_one_flip():
-                sent += 1
-            else:
-                # There were no more flips to process for now.
-                # If --no-loop was passed then: job done, break out of the loop
-                if not loop:
-                    break
+            # Submit unprocessed flips to the self.executor
+            while self.process_one_flip() and not self.shutdown:
+                pass
 
-                # Otherwise, sleep for 2 seconds, then look for more work
+            # Either all workers are busy or there are no unprocessed flips.
+            # Wait a bit:
+            if not self.shutdown:
                 time.sleep(2)
 
-        return f"Sent {sent} alert(s)."
+        self.executor.shutdown(wait=True)
+        return "Done."

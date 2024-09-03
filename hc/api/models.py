@@ -48,14 +48,13 @@ TRANSPORTS: dict[str, tuple[str, type[transports.Transport]]] = {
     "email": ("Email", transports.Email),
     "gotify": ("Gotify", transports.Gotify),
     "group": ("Group", transports.Group),
-    "hipchat": ("HipChat", transports.RemovedTransport),
     "linenotify": ("LINE Notify", transports.LineNotify),
     "matrix": ("Matrix", transports.Matrix),
     "mattermost": ("Mattermost", transports.Mattermost),
-    "msteams": ("Microsoft Teams", transports.MsTeams),
+    "msteams": ("MS Teams Connector (stops working Dec 2024)", transports.MsTeams),
+    "msteamsw": ("Microsoft Teams", transports.MsTeamsWorkflow),
     "ntfy": ("ntfy", transports.Ntfy),
     "opsgenie": ("Opsgenie", transports.Opsgenie),
-    "pagerteam": ("Pager Team", transports.RemovedTransport),
     "pagertree": ("PagerTree", transports.PagerTree),
     "pd": ("PagerDuty", transports.PagerDuty),
     "po": ("Pushover", transports.Pushover),
@@ -71,7 +70,6 @@ TRANSPORTS: dict[str, tuple[str, type[transports.Transport]]] = {
     "victorops": ("Splunk On-Call", transports.VictorOps),
     "webhook": ("Webhook", transports.Webhook),
     "whatsapp": ("WhatsApp", transports.WhatsApp),
-    "zendesk": ("Zendesk", transports.RemovedTransport),
     "zulip": ("Zulip", transports.Zulip),
 }
 
@@ -103,6 +101,7 @@ def isostring(dt: datetime | None) -> str | None:
 
 
 class CheckDict(TypedDict, total=False):
+    uuid: str | None
     name: str
     slug: str
     tags: str
@@ -346,7 +345,7 @@ class Check(models.Model):
         in the process of deletion.
         """
         with transaction.atomic():
-            Check.objects.select_for_update().get(id=self.id).delete()
+            Check.objects.select_for_update().filter(id=self.id).delete()
 
     def assign_all_channels(self) -> None:
         channels = Channel.objects.filter(project=self.project)
@@ -411,6 +410,7 @@ class Check(models.Model):
         if readonly:
             result["unique_key"] = self.unique_key
         else:
+            result["uuid"] = str(self.code)
             result["ping_url"] = settings.PING_ENDPOINT + str(self.code)
 
             # Optimization: construct API URLs manually instead of using reverse().
@@ -445,6 +445,9 @@ class Check(models.Model):
         # the updated Check object before the Ping object is created.
         # To avoid this, put both operations inside a transaction:
         with transaction.atomic():
+            # Acquire a lock. Without locking, on MariaDB, concurrent pings can
+            # lead to a deadlock
+            self = Check.objects.select_for_update().get(id=self.id)
             frozen_now = now()
 
             if self.status == "paused" and self.manual_resume:
@@ -632,7 +635,6 @@ class Ping(models.Model):
     remote_addr = models.GenericIPAddressField(blank=True, null=True)
     method = models.CharField(max_length=10, blank=True)
     ua = models.CharField(max_length=200, blank=True)
-    body = models.TextField(blank=True, null=True)
     body_raw = models.BinaryField(null=True)
     object_size = models.IntegerField(null=True)
     exitstatus = models.SmallIntegerField(null=True)
@@ -664,14 +666,12 @@ class Ping(models.Model):
         return result
 
     def has_body(self) -> bool:
-        if self.body or self.body_raw or self.object_size:
+        if self.body_raw or self.object_size:
             return True
 
         return False
 
     def get_body_bytes(self) -> bytes | None:
-        if self.body:
-            return self.body.encode()
         if self.object_size and self.n:
             return get_object(str(self.owner.code), self.n)
         if self.body_raw:
@@ -687,8 +687,6 @@ class Ping(models.Model):
         return None
 
     def get_body_size(self) -> int:
-        if self.body:
-            return len(self.body)
         if self.body_raw:
             return len(self.body_raw)
         if self.object_size:

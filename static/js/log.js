@@ -67,11 +67,17 @@ $(function () {
 
     function switchDateFormat(format, rows) {
         dateFormat = format;
+        var currentYear = moment().year();
         updateSliderPreview();
 
         rows.forEach(function(row) {
             var dt = fromUnix(row.dataset.dt);
-            row.children[1].textContent = dt.format("MMM D");
+            var dtFormat = "MMM D";
+            if (dt.year() != currentYear) {
+                dtFormat = "MMM D, YYYY";
+            }
+            
+            row.children[1].textContent = dt.format(dtFormat);
             row.children[2].textContent = dt.format("HH:mm");
         })
     }
@@ -118,6 +124,9 @@ $(function () {
                 switchDateFormat(dateFormat, tbody.querySelectorAll("tr"));
                 document.getElementById("log").prepend(tbody);
                 updateNumHits();
+            },
+            error: function(data, textStatus, xhr) {
+                activeRequest = null;
             }
         });
     }

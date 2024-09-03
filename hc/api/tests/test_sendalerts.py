@@ -10,6 +10,7 @@ from hc.api.models import Check, Flip
 from hc.test import BaseTestCase
 
 
+@patch("hc.api.management.commands.sendalerts.close_old_connections", Mock())
 class SendAlertsTestCase(BaseTestCase):
     def test_it_handles_grace_period(self) -> None:
         check = Check(project=self.project, status="up")
@@ -58,14 +59,11 @@ class SendAlertsTestCase(BaseTestCase):
         flip.new_status = "up"
         flip.save()
 
-        result = Command().process_one_flip()
+        mock_notify.return_value = "all is well"
+        result = Command(stdout=Mock()).process_one_flip()
 
         # If it finds work, it should return True
         self.assertTrue(result)
-
-        # It should set the processed date
-        flip.refresh_from_db()
-        self.assertTrue(flip.processed)
 
         # It should call `notify`
         mock_notify.assert_called_once()
@@ -90,6 +88,22 @@ class SendAlertsTestCase(BaseTestCase):
         # a flip should have not been created
         self.assertEqual(Flip.objects.count(), 0)
 
+    def test_it_marks_flip_as_processed(self) -> None:
+        check = Check(project=self.project, status="down")
+        check.last_ping = now() - td(days=2)
+        check.save()
+
+        flip = Flip(owner=check, created=check.last_ping)
+        flip.old_status = "up"
+        flip.new_status = "down"
+        flip.save()
+
+        notify(flip)
+
+        # It should set the processed date
+        flip.refresh_from_db()
+        self.assertTrue(flip.processed)
+
     def test_it_sets_next_nag_date(self) -> None:
         self.profile.nag_period = td(hours=1)
         self.profile.save()
@@ -106,7 +120,7 @@ class SendAlertsTestCase(BaseTestCase):
         flip.new_status = "down"
         flip.save()
 
-        notify(flip.id, Mock())
+        notify(flip)
 
         # next_nag_gate should now be set for the project's owner
         self.profile.refresh_from_db()
@@ -134,7 +148,7 @@ class SendAlertsTestCase(BaseTestCase):
         flip.new_status = "up"
         flip.save()
 
-        notify(flip.id, Mock())
+        notify(flip)
 
         # next_nag_gate should now be cleared out for the project's owner
         self.profile.refresh_from_db()
@@ -159,7 +173,7 @@ class SendAlertsTestCase(BaseTestCase):
         flip.new_status = "down"
         flip.save()
 
-        notify(flip.id, Mock())
+        notify(flip)
 
         self.profile.refresh_from_db()
         self.assertEqual(self.profile.next_nag_date, original_nag_date)

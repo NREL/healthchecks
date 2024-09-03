@@ -12,6 +12,7 @@ from collections.abc import Iterable
 from datetime import datetime
 from datetime import timedelta as td
 from email.message import EmailMessage
+from itertools import islice
 from secrets import token_urlsafe
 from typing import Literal, TypedDict, cast
 from urllib.parse import urlencode, urlparse
@@ -26,6 +27,7 @@ from django.contrib.auth.models import User
 from django.core import signing
 from django.core.exceptions import PermissionDenied
 from django.db.models import Case, Count, F, Q, QuerySet, When
+from django.db.models.functions import Substr
 from django.http import (
     Http404,
     HttpRequest,
@@ -40,6 +42,7 @@ from django.urls import reverse
 from django.utils.timezone import now
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_POST
+from django_stubs_ext import WithAnnotations
 from oncalendar import OnCalendar, OnCalendarError
 from pydantic import BaseModel, TypeAdapter, ValidationError
 
@@ -104,6 +107,14 @@ def _tags_counts(checks: Iterable[Check]) -> tuple[list[tuple[str, str, str]], i
         result.append((tag, status, text))
 
     return result, num_down
+
+
+def _common_timezones(checks: Iterable[Check]) -> list[str]:
+    counter: Counter[str] = Counter()
+    for check in checks:
+        counter[check.tz] += 1
+
+    return [tz for tz, _ in counter.most_common(3)]
 
 
 def _get_check_for_user(
@@ -250,8 +261,8 @@ def checks(request: AuthenticatedHttpRequest, code: UUID) -> HttpResponse:
     search = request.GET.get("search", "")
     if search:
         for check in checks:
-            search_key = "%s\n%s" % (check.name.lower(), check.code)
-            if search not in search_key:
+            haystack = f"{check.name}\n{check.slug}\n{check.code}"
+            if search not in haystack.lower():
                 hidden_checks.add(check)
 
     # Figure out which checks have ambiguous ping URLs
@@ -278,6 +289,7 @@ def checks(request: AuthenticatedHttpRequest, code: UUID) -> HttpResponse:
         "num_down": num_down,
         "tags": tags_counts,
         "ping_endpoint": settings.PING_ENDPOINT,
+        "common_timezones": _common_timezones(checks),
         "timezones": all_timezones,
         "project": project,
         "num_available": project.num_checks_available(),
@@ -292,8 +304,10 @@ def checks(request: AuthenticatedHttpRequest, code: UUID) -> HttpResponse:
     return render(request, "front/checks.html", ctx)
 
 
-@login_required
-def status(request: AuthenticatedHttpRequest, code: UUID) -> HttpResponse:
+def status(request: HttpRequest, code: UUID) -> HttpResponse:
+    if not request.user.is_authenticated:
+        return HttpResponseForbidden()
+
     project, rw = _get_project_for_user(request, code)
     checks = list(Check.objects.filter(project=project))
 
@@ -363,6 +377,7 @@ def index(request: HttpRequest) -> HttpResponse:
     if not request.user.is_authenticated:
         return redirect("hc-login")
 
+    # We now know user is logged, tell the type checker request.profile exists-
     request = cast(AuthenticatedHttpRequest, request)
     summary = _get_project_summary(request.profile)
     if "refresh" in request.GET:
@@ -635,7 +650,7 @@ def update_timeout(request: AuthenticatedHttpRequest, code: UUID) -> HttpRespons
 def cron_preview(request: HttpRequest) -> HttpResponse:
     schedule = request.POST.get("schedule", "")
     tz = request.POST.get("tz")
-    ctx: dict[str, object] = {"tz": tz, "dates": []}
+    ctx: dict[str, object] = {"tz": tz}
 
     if tz not in all_timezones:
         ctx["bad_tz"] = True
@@ -644,11 +659,12 @@ def cron_preview(request: HttpRequest) -> HttpResponse:
     now_local = now().astimezone(ZoneInfo(tz))
     try:
         it = CronSim(schedule, now_local)
-        for i in range(0, 6):
-            assert isinstance(ctx["dates"], list)
-            ctx["dates"].append(next(it))
+        ctx["dates"] = list(islice(it, 0, 6))
         ctx["desc"] = it.explain()
-    except (CronSimError, StopIteration):
+    except CronSimError:
+        ctx["bad_schedule"] = True
+
+    if not ctx.get("dates"):
         ctx["bad_schedule"] = True
 
     return render(request, "front/cron_preview.html", ctx)
@@ -669,12 +685,12 @@ def oncalendar_preview(request: HttpRequest) -> HttpResponse:
     try:
         it = OnCalendar(schedule, now_local)
         iterations = 6 if tz == "UTC" else 4
-        for i in range(0, iterations):
-            assert isinstance(ctx["dates"], list)
-            ctx["dates"].append(next(it))
-    except (OnCalendarError, StopIteration):
-        if not ctx["dates"]:
-            ctx["bad_schedule"] = True
+        ctx["dates"] = list(islice(it, 0, iterations))
+    except OnCalendarError:
+        ctx["bad_schedule"] = True
+
+    if not ctx["dates"]:
+        ctx["bad_schedule"] = True
 
     return render(request, "front/oncalendar_preview.html", ctx)
 
@@ -848,13 +864,17 @@ def clear_events(request: AuthenticatedHttpRequest, code: UUID) -> HttpResponse:
     return redirect("hc-details", code)
 
 
+class PingAnnotations(TypedDict):
+    body_raw_preview: bytes
+
+
 def _get_events(
     check: Check,
     page_limit: int,
     start: datetime,
     end: datetime,
     kinds: tuple[str, ...] | None = None,
-) -> list[Notification | Ping | Flip]:
+) -> list[Notification | WithAnnotations[Ping, PingAnnotations] | Flip]:
     # Sorting by "n" instead of "id" is important here. Both give the same
     # query results, but sorting by "id" can cause postgres to pick
     # api_ping.id index (slow if the api_ping table is big). Sorting by
@@ -867,6 +887,11 @@ def _get_events(
             kinds_filter = kinds_filter | Q(kind__isnull=True) | Q(kind="")
         pq = pq.filter(kinds_filter)
 
+    # Optimization: defer loading body_raw, instead load its first 150 bytes
+    # as "body_raw_preview". This reduces both network I/O to database, and disk I/O
+    # on the database host if the database contains large request bodies.
+    pq = pq.defer("body_raw")
+    pq = pq.annotate(body_raw_preview=Substr("body_raw", 1, 151))
     pings = list(pq[:page_limit])
 
     # Optimization: the template will access Ping.duration, which would generate a
@@ -965,9 +990,10 @@ def details(request: AuthenticatedHttpRequest, code: UUID) -> HttpResponse:
         channels.append(channel)
 
     all_tags = set()
-    q = Check.objects.filter(project=check.project).exclude(tags="")
-    for tags in q.values_list("tags", flat=True):
-        all_tags.update(tags.split(" "))
+    sibling_checks = Check.objects.filter(project=check.project).only("tags", "tz")
+    for sibling in sibling_checks:
+        if sibling.tags:
+            all_tags.update(sibling.tags.split(" "))
 
     ctx = {
         "page": "details",
@@ -977,6 +1003,7 @@ def details(request: AuthenticatedHttpRequest, code: UUID) -> HttpResponse:
         "channels": regular_channels,
         "group_channels": group_channels,
         "enabled_channels": list(check.channel_set.all()),
+        "common_timezones": _common_timezones(sibling_checks),
         "timezones": all_timezones,
         "downtimes": check.downtimes(3, request.profile.tz),
         "tz": request.profile.tz,
@@ -1063,8 +1090,12 @@ def copy(request: AuthenticatedHttpRequest, code: UUID) -> HttpResponse:
     return redirect(url + "?copied")
 
 
-@login_required
-def status_single(request: AuthenticatedHttpRequest, code: UUID) -> HttpResponse:
+def status_single(request: HttpRequest, code: UUID) -> HttpResponse:
+    if not request.user.is_authenticated:
+        return HttpResponseForbidden()
+
+    # We now know user is logged, tell the type checker request.profile exists-
+    request = cast(AuthenticatedHttpRequest, request)
     check, rw = _get_check_for_user(request, code, preload_owner_profile=True)
 
     status = check.get_status()
@@ -1330,10 +1361,7 @@ def remove_channel(request: AuthenticatedHttpRequest, code: UUID) -> HttpRespons
     return redirect("hc-channels", project.code)
 
 
-def email_form(request: HttpRequest, channel: Channel) -> HttpResponse:
-    # Convince mypy we have User instead of AnonymousUser:
-    assert isinstance(request.user, User)
-
+def email_form(request: AuthenticatedHttpRequest, channel: Channel) -> HttpResponse:
     adding = channel._state.adding
     if request.method == "POST":
         form = forms.EmailForm(request.POST)
@@ -1663,6 +1691,8 @@ def add_slack_complete(request: AuthenticatedHttpRequest) -> HttpResponse:
 
     channel = Channel(kind="slack", project=project)
     channel.value = result.text
+    if channel.slack_channel:
+        channel.name = channel.slack_channel
     channel.save()
     channel.assign_all_checks()
 
@@ -2405,7 +2435,7 @@ def add_msteams(request: AuthenticatedHttpRequest, code: UUID) -> HttpResponse:
     if request.method == "POST":
         form = forms.AddUrlForm(request.POST)
         if form.is_valid():
-            channel = Channel(project=project, kind="msteams")
+            channel = Channel(project=project, kind="msteamsw")
             channel.value = form.cleaned_data["value"]
             channel.save()
 
@@ -2755,8 +2785,10 @@ def verify_signal_number(request: AuthenticatedHttpRequest) -> HttpResponse:
     return render_result(None)
 
 
-@login_required
-def log_events(request: AuthenticatedHttpRequest, code: UUID) -> HttpResponse:
+def log_events(request: HttpRequest, code: UUID) -> HttpResponse:
+    if not request.user.is_authenticated:
+        return HttpResponseForbidden()
+
     check, rw = _get_check_for_user(request, code, preload_owner_profile=True)
     form = forms.LogFiltersForm(request.GET)
     if not form.is_valid():

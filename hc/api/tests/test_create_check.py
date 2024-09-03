@@ -333,6 +333,14 @@ class CreateCheckTestCase(BaseTestCase):
         )
         self.assertEqual(r.status_code, 400)
 
+    def test_it_converts_legacy_timezone(self) -> None:
+        for old, new in [("Europe/Kiev", "Europe/Kyiv"), ("UCT", "Etc/UTC")]:
+            r = self.post({"schedule": "* * * * *", "tz": old, "grace": 60})
+            self.assertEqual(r.status_code, 201)
+
+            doc = r.json()
+            self.assertEqual(doc["tz"], new)
+
     def test_it_supports_oncalendar_syntax(self) -> None:
         r = self.post({"schedule": "12:34", "tz": "Europe/Riga", "grace": 60})
         self.assertEqual(r.status_code, 201)
