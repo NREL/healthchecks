@@ -10,7 +10,7 @@ services:
       - POSTGRES_DB=$DB_NAME
       - POSTGRES_PASSWORD=$DB_PASSWORD
   web:
-    image: healthchecks/healthchecks:v3.4-dev-ldap
+    image: healthchecks/healthchecks:v3.6-dev-ldap
     build:
         context: ..
         dockerfile: docker/Dockerfile
