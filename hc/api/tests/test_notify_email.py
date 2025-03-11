@@ -1,5 +1,3 @@
-# coding: utf-8
-
 from __future__ import annotations
 
 import json
@@ -48,6 +46,7 @@ class NotifyEmailTestCase(BaseTestCase):
         self.flip.created = now()
         self.flip.old_status = "new"
         self.flip.new_status = "down"
+        self.flip.reason = "timeout"
 
     def get_html(self, email: EmailMessage) -> str:
         assert isinstance(email, EmailMultiAlternatives)
@@ -76,7 +75,9 @@ class NotifyEmailTestCase(BaseTestCase):
         html = self.get_html(email)
         # Message
         self.assertIn("""The check "Daily Backup" has gone down.""", email.body)
-        self.assertIn(""""Daily Backup" is DOWN.""", html)
+        self.assertIn("grace time passed", email.body)
+        self.assertIn(""""Daily Backup" is DOWN""", html)
+        self.assertIn("grace time passed", html)
 
         # Description
         self.assertIn("Line 1\nLine2", email.body)
@@ -116,6 +117,17 @@ class NotifyEmailTestCase(BaseTestCase):
 
         # Check's code must not be in the plain text body
         self.assertNotIn(str(self.check.code), email.body)
+
+    @override_settings(DEFAULT_FROM_EMAIL="alerts@example.org")
+    def test_it_handles_reason_failure(self) -> None:
+        self.flip.reason = "fail"
+        self.channel.notify(self.flip)
+
+        email = mail.outbox[0]
+        self.assertIn("received a failure signal", email.body)
+
+        html = self.get_html(email)
+        self.assertIn("received a failure signal", html)
 
     @override_settings(DEFAULT_FROM_EMAIL='"Alerts" <alerts@example.org>')
     def test_it_message_id_generation_handles_angle_brackets(self) -> None:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from uuid import UUID
 from datetime import timedelta as td
 from unittest.mock import Mock, patch
 from uuid import uuid4
@@ -180,6 +181,7 @@ class PingTestCase(BaseTestCase):
         flip = Flip.objects.get()
         self.assertEqual(flip.owner, self.check)
         self.assertEqual(flip.new_status, "down")
+        self.assertEqual(flip.reason, "fail")
 
     def test_start_endpoint_works(self) -> None:
         last_ping = now() - td(hours=2)
@@ -215,6 +217,15 @@ class PingTestCase(BaseTestCase):
         self.check.refresh_from_db()
         self.assertTrue(self.check.last_start)
         self.assertEqual(self.check.last_start_rid, rid)
+
+    def test_it_accepts_uppercase_rid(self) -> None:
+        rid = "04603D8B-EDF4-4E85-8F61-24BEDBCAAB59"
+        r = self.client.get(self.url + f"/start?rid={rid}")
+        self.assertEqual(r.status_code, 200)
+
+        self.check.refresh_from_db()
+        self.assertTrue(self.check.last_start)
+        self.assertEqual(self.check.last_start_rid, UUID(rid))
 
     def test_it_sets_last_duration(self) -> None:
         self.check.last_start = now() - td(seconds=10)

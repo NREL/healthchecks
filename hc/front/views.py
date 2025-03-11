@@ -23,7 +23,6 @@ from cronsim import CronSim, CronSimError
 from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
-from django.contrib.auth.models import User
 from django.core import signing
 from django.core.exceptions import PermissionDenied
 from django.db.models import Case, Count, F, Q, QuerySet, When
@@ -59,7 +58,7 @@ from hc.api.models import (
     Ping,
     TokenBucket,
 )
-from hc.api.transports import Signal, Telegram, TransportError
+from hc.api.transports import Signal, SignalRateLimitFailure, Telegram, TransportError
 from hc.front import forms
 from hc.front.decorators import require_setting
 from hc.front.templatetags.hc_extras import (
@@ -68,9 +67,10 @@ from hc.front.templatetags.hc_extras import (
     site_hostname,
     sortchecks,
 )
-from hc.lib import curl
+from hc.lib import curl, github
 from hc.lib.badges import get_badge_url
 from hc.lib.tz import all_timezones
+from hc.lib.urls import absolute_reverse
 
 logger = logging.getLogger(__name__)
 
@@ -87,12 +87,11 @@ def _tags_counts(checks: Iterable[Check]) -> tuple[list[tuple[str, str, str]], i
     counts: Counter[str] = Counter()
     down_counts: Counter[str] = Counter()
     for check in checks:
-        status = check.get_status()
         counts.update(check.tags_list())
-        if status == "down":
+        if check.cached_status == "down":
             num_down += 1
             down_counts.update(check.tags_list())
-        elif status == "grace":
+        elif check.cached_status == "grace":
             grace.update(check.tags_list())
 
     result = []
@@ -202,12 +201,17 @@ def _get_rw_project_for_user(request: HttpRequest, code: UUID) -> Project:
     return project
 
 
-def _refresh_last_active_date(profile: Profile) -> None:
+def _refresh_last_active_date(request: AuthenticatedHttpRequest) -> None:
     """Update last_active_date if it is more than a day old."""
 
+    profile = request.profile
     if profile.last_active_date is None or (now() - profile.last_active_date).days > 0:
         profile.last_active_date = now()
         profile.save()
+
+        # Also modify session to trigger session cookie refresh
+        # and push forward its expiry date:
+        request.session["last_active"] = profile.last_active_date.timestamp()
 
     return None
 
@@ -220,9 +224,15 @@ def _get_referer_qs(request: HttpRequest) -> str:
     return ""
 
 
+def _status_match(check: Check, statuses: set[str]) -> bool:
+    if "started" in statuses and check.last_start:
+        return True
+    return check.cached_status in statuses
+
+
 @login_required
 def checks(request: AuthenticatedHttpRequest, code: UUID) -> HttpResponse:
-    _refresh_last_active_date(request.profile)
+    _refresh_last_active_date(request)
     project, rw = _get_project_for_user(request, code)
 
     if request.GET.get("sort") in VALID_SORT_VALUES:
@@ -265,6 +275,13 @@ def checks(request: AuthenticatedHttpRequest, code: UUID) -> HttpResponse:
             if search not in haystack.lower():
                 hidden_checks.add(check)
 
+    # Hide checks that don't match status filters
+    selected_statuses = set(request.GET.getlist("status", []))
+    if selected_statuses:
+        for check in checks:
+            if not _status_match(check, selected_statuses):
+                hidden_checks.add(check)
+
     # Figure out which checks have ambiguous ping URLs
     seen, ambiguous = set(), set()
     if project.show_slugs:
@@ -295,8 +312,10 @@ def checks(request: AuthenticatedHttpRequest, code: UUID) -> HttpResponse:
         "num_available": project.num_checks_available(),
         "sort": request.profile.sort,
         "selected_tags": selected_tags,
+        "selected_statuses": selected_statuses,
         "search": search,
         "hidden_checks": hidden_checks,
+        "num_visible": len(checks) - len(hidden_checks),
         "ambiguous": ambiguous,
         "show_last_duration": show_last_duration,
     }
@@ -379,6 +398,7 @@ def index(request: HttpRequest) -> HttpResponse:
 
     # We now know user is logged, tell the type checker request.profile exists-
     request = cast(AuthenticatedHttpRequest, request)
+    _refresh_last_active_date(request)
     summary = _get_project_summary(request.profile)
     if "refresh" in request.GET:
         return JsonResponse({str(k): v for k, v in summary.items()})
@@ -722,6 +742,10 @@ def validate_schedule(request: HttpRequest) -> HttpResponse:
 def ping_details(
     request: AuthenticatedHttpRequest, code: UUID, n: int | None = None
 ) -> HttpResponse:
+    # This view makes two non-obvious SQL queries:
+    # * it calls ping.get_body(), which reads self.owner.code, triggering a query
+    # * the template calls ping.duration() which queries past "/start" events
+
     check, rw = _get_check_for_user(request, code)
     q = Ping.objects.filter(owner=check)
     if n:
@@ -782,7 +806,11 @@ def ping_body(request: AuthenticatedHttpRequest, code: UUID, n: int) -> HttpResp
     check, rw = _get_check_for_user(request, code)
     ping = get_object_or_404(Ping, owner=check, n=n)
 
-    body = ping.get_body_bytes()
+    try:
+        body = ping.get_body_bytes()
+    except Ping.GetBodyError:
+        return HttpResponse(status=503)
+
     if not body:
         raise Http404("not found")
 
@@ -975,7 +1003,7 @@ def log(request: AuthenticatedHttpRequest, code: UUID) -> HttpResponse:
 
 @login_required
 def details(request: AuthenticatedHttpRequest, code: UUID) -> HttpResponse:
-    _refresh_last_active_date(request.profile)
+    _refresh_last_active_date(request)
     check, rw = _get_check_for_user(request, code, preload_owner_profile=True)
 
     if request.GET.get("urls") in ("uuid", "slug") and rw:
@@ -1142,8 +1170,8 @@ def badges(request: AuthenticatedHttpRequest, code: UUID) -> HttpResponse:
             url = get_badge_url(project.badge_key, label, fmt, with_late)
         elif form.cleaned_data["target"] == "check":
             check = project.check_set.get(code=form.cleaned_data["check"])
-            url = settings.SITE_ROOT + reverse(
-                "hc-badge-check", args=[states, check.prepare_badge_key(), fmt]
+            url = absolute_reverse(
+                "hc-badge-check", args=[states, check.badge_key, fmt]
             )
             label = check.name_then_code()
 
@@ -1217,7 +1245,7 @@ def channels(request: AuthenticatedHttpRequest, code: UUID) -> HttpResponse:
         "enable_apprise": settings.APPRISE_ENABLED is True,
         "enable_call": bool(settings.TWILIO_AUTH),
         "enable_discord": bool(settings.DISCORD_CLIENT_ID),
-        "enable_linenotify": bool(settings.LINENOTIFY_CLIENT_ID),
+        "enable_github": bool(settings.GITHUB_CLIENT_ID),
         "enable_matrix": bool(settings.MATRIX_ACCESS_TOKEN),
         "enable_mattermost": settings.MATTERMOST_ENABLED is True,
         "enable_msteams": settings.MSTEAMS_ENABLED is True,
@@ -1516,7 +1544,7 @@ def add_pd(request: AuthenticatedHttpRequest, code: UUID) -> HttpResponse:
     if settings.PD_APP_ID:
         state = token_urlsafe()
 
-        redirect_url = settings.SITE_ROOT + reverse("hc-add-pd-complete")
+        redirect_url = absolute_reverse("hc-add-pd-complete")
         redirect_url += "?" + urlencode({"state": state})
 
         install_url = "https://app.pagerduty.com/install/integration?" + urlencode(
@@ -1761,7 +1789,7 @@ def add_pushbullet(request: AuthenticatedHttpRequest, code: UUID) -> HttpRespons
     authorize_url = "https://www.pushbullet.com/authorize?" + urlencode(
         {
             "client_id": settings.PUSHBULLET_CLIENT_ID,
-            "redirect_uri": settings.SITE_ROOT + reverse(add_pushbullet_complete),
+            "redirect_uri": absolute_reverse(add_pushbullet_complete),
             "response_type": "code",
             "state": state,
         }
@@ -1832,7 +1860,7 @@ def add_discord(request: AuthenticatedHttpRequest, code: UUID) -> HttpResponse:
         {
             "client_id": settings.DISCORD_CLIENT_ID,
             "scope": "webhook.incoming",
-            "redirect_uri": settings.SITE_ROOT + reverse(add_discord_complete),
+            "redirect_uri": absolute_reverse(add_discord_complete),
             "response_type": "code",
             "state": state,
         }
@@ -1866,7 +1894,7 @@ def add_discord_complete(request: AuthenticatedHttpRequest) -> HttpResponse:
         "client_secret": settings.DISCORD_CLIENT_SECRET,
         "code": request.GET.get("code"),
         "grant_type": "authorization_code",
-        "redirect_uri": settings.SITE_ROOT + reverse(add_discord_complete),
+        "redirect_uri": absolute_reverse(add_discord_complete),
     }
     result = curl.post("https://discordapp.com/api/oauth2/token", data)
 
@@ -1906,18 +1934,14 @@ def add_pushover(request: AuthenticatedHttpRequest, code: UUID) -> HttpResponse:
     if request.method == "POST":
         state = token_urlsafe().lower()
 
-        failure_url = settings.SITE_ROOT + reverse("hc-channels", args=[project.code])
-        success_url = (
-            settings.SITE_ROOT
-            + reverse("hc-add-pushover", args=[project.code])
-            + "?"
-            + urlencode(
-                {
-                    "state": state,
-                    "prio": request.POST.get("po_priority", "0"),
-                    "prio_up": request.POST.get("po_priority_up", "0"),
-                }
-            )
+        failure_url = absolute_reverse("hc-channels", args=[project.code])
+        success_url = absolute_reverse("hc-add-pushover", args=[project.code])
+        success_url += "?" + urlencode(
+            {
+                "state": state,
+                "prio": request.POST.get("po_priority", "0"),
+                "prio_up": request.POST.get("po_priority_up", "0"),
+            }
         )
         assert settings.PUSHOVER_SUBSCRIPTION_URL
         subscription_url = (
@@ -2255,7 +2279,7 @@ def add_whatsapp(request: AuthenticatedHttpRequest, code: UUID) -> HttpResponse:
 def signal_form(request: HttpRequest, channel: Channel) -> HttpResponse:
     adding = channel._state.adding
     if request.method == "POST":
-        form = forms.PhoneUpDownForm(request.POST)
+        form = forms.SignalForm(request.POST)
         if form.is_valid():
             channel.name = form.cleaned_data["label"]
             channel.value = form.get_json()
@@ -2265,12 +2289,12 @@ def signal_form(request: HttpRequest, channel: Channel) -> HttpResponse:
                 channel.assign_all_checks()
             return redirect("hc-channels", channel.project.code)
     elif adding:
-        form = forms.PhoneUpDownForm()
+        form = forms.SignalForm()
     else:
-        form = forms.PhoneUpDownForm(
+        form = forms.SignalForm(
             {
                 "label": channel.name,
-                "phone": channel.phone.value,
+                "recipient": channel.phone.value,
                 "up": channel.phone.notify_up,
                 "down": channel.phone.notify_down,
             }
@@ -2309,7 +2333,7 @@ def add_trello(request: AuthenticatedHttpRequest, code: UUID) -> HttpResponse:
         channel.assign_all_checks()
         return redirect("hc-channels", project.code)
 
-    return_url = settings.SITE_ROOT + reverse("hc-add-trello", args=[project.code])
+    return_url = absolute_reverse("hc-add-trello", args=[project.code])
     authorize_url = "https://trello.com/1/authorize?" + urlencode(
         {
             "expiration": "never",
@@ -2461,7 +2485,15 @@ def add_prometheus(request: AuthenticatedHttpRequest, code: UUID) -> HttpRespons
 
 
 @require_setting("PROMETHEUS_ENABLED")
-def metrics(request: HttpRequest, code: UUID, key: str) -> HttpResponse:
+def metrics(request: HttpRequest, code: UUID, key: str | None = None) -> HttpResponse:
+    if key is None:
+        # If key was not in the URL, expect it in the Authorization request header
+        key = request.META.get("HTTP_AUTHORIZATION", "")
+        if not key.startswith("Bearer "):
+            return HttpResponse(status=401)
+
+        key = key.lstrip("Bearer ")
+
     if len(key) != 32:
         return HttpResponseBadRequest()
 
@@ -2543,95 +2575,6 @@ def add_spike(request: AuthenticatedHttpRequest, code: UUID) -> HttpResponse:
 
     ctx = {"page": "channels", "project": project, "form": form}
     return render(request, "integrations/add_spike.html", ctx)
-
-
-@require_setting("LINENOTIFY_CLIENT_ID")
-@login_required
-def add_linenotify(request: AuthenticatedHttpRequest, code: UUID) -> HttpResponse:
-    project = _get_rw_project_for_user(request, code)
-
-    state = token_urlsafe()
-    authorize_url = " https://notify-bot.line.me/oauth/authorize?" + urlencode(
-        {
-            "client_id": settings.LINENOTIFY_CLIENT_ID,
-            "redirect_uri": settings.SITE_ROOT + reverse(add_linenotify_complete),
-            "response_type": "code",
-            "state": state,
-            "scope": "notify",
-        }
-    )
-
-    ctx = {
-        "page": "channels",
-        "project": project,
-        "authorize_url": authorize_url,
-    }
-
-    request.session["add_linenotify"] = (state, str(project.code))
-    return render(request, "integrations/add_linenotify.html", ctx)
-
-
-class LineTokenResponse(BaseModel):
-    status: Literal[200]
-    access_token: str
-
-
-class LineStatusResponse(BaseModel):
-    target: str
-
-
-@require_setting("LINENOTIFY_CLIENT_ID")
-@login_required
-def add_linenotify_complete(request: AuthenticatedHttpRequest) -> HttpResponse:
-    if "add_linenotify" not in request.session:
-        return HttpResponseForbidden()
-
-    state, code_str = request.session.pop("add_linenotify")
-    code = UUID(code_str)
-    if request.GET.get("state") != state:
-        return HttpResponseForbidden()
-
-    project = _get_rw_project_for_user(request, code)
-    if request.GET.get("error") == "access_denied":
-        messages.warning(request, "LINE Notify setup was cancelled.")
-        return redirect("hc-channels", project.code)
-
-    # Exchange code for access token
-    data = {
-        "grant_type": "authorization_code",
-        "code": request.GET.get("code"),
-        "redirect_uri": settings.SITE_ROOT + reverse(add_linenotify_complete),
-        "client_id": settings.LINENOTIFY_CLIENT_ID,
-        "client_secret": settings.LINENOTIFY_CLIENT_SECRET,
-    }
-    result = curl.post("https://notify-bot.line.me/oauth/token", data)
-    try:
-        tr = LineTokenResponse.model_validate_json(result.content, strict=True)
-        token = tr.access_token
-    except ValidationError:
-        messages.warning(request, "Received an unexpected response from LINE Notify.")
-        logger.warning("Unexpected LINE OAuth response: %s", result.content)
-        return redirect("hc-channels", project.code)
-
-    # Fetch notification target's name, will use it as channel name:
-    headers = {"Authorization": f"Bearer {token}"}
-    result = curl.get("https://notify-api.line.me/api/status", headers=headers)
-    try:
-        sr = LineStatusResponse.model_validate_json(result.content, strict=True)
-        target = sr.target
-    except ValidationError:
-        messages.warning(request, "Received an unexpected response from LINE Notify.")
-        logger.warning("Unexpected LINE Status response: %s", result.content)
-        return redirect("hc-channels", project.code)
-
-    channel = Channel(kind="linenotify", project=project)
-    channel.name = target
-    channel.value = token
-    channel.save()
-    channel.assign_all_checks()
-    messages.success(request, "The LINE Notify integration has been added!")
-
-    return redirect("hc-channels", project.code)
 
 
 @login_required
@@ -2767,17 +2710,20 @@ def verify_signal_number(request: AuthenticatedHttpRequest) -> HttpResponse:
     if not TokenBucket.authorize_signal_verification(request.user):
         return render_result("Verification rate limit exceeded")
 
-    form = forms.PhoneNumberForm(request.POST)
+    form = forms.SignalRecipientForm(request.POST)
     if not form.is_valid():
         return render_result("Invalid phone number")
 
-    phone = form.cleaned_data["phone"]
+    recipient = form.cleaned_data["recipient"]
     # Enforce per-recipient rate limit (6 messages per minute)
-    if not TokenBucket.authorize_signal(phone):
+    if not TokenBucket.authorize_signal(recipient):
         return render_result("Verification rate limit exceeded")
 
     try:
-        Signal.send(phone, f"Test message from {settings.SITE_NAME}")
+        Signal.send(recipient, f"Test message from {settings.SITE_NAME}")
+    except SignalRateLimitFailure as e:
+        Channel().send_signal_captcha_alert(e.token, e.reply.decode())
+        return render_result(e.message)
     except TransportError as e:
         return render_result(e.message)
 
@@ -2817,6 +2763,95 @@ def log_events(request: HttpRequest, code: UUID) -> HttpResponse:
         # to specify "return any events after *this* point".
         response["X-Last-Event-Timestamp"] = str(events[0].created.timestamp())
     return response
+
+
+@require_setting("GITHUB_CLIENT_ID")
+@login_required
+def add_github(request: HttpRequest, code: UUID) -> HttpResponse:
+    project = _get_rw_project_for_user(request, code)
+
+    state = token_urlsafe()
+    authorize_url = "https://github.com/login/oauth/authorize?"
+    authorize_url += urlencode({"client_id": settings.GITHUB_CLIENT_ID, "state": state})
+    ctx = {
+        "project": project,
+        "authorize_url": authorize_url,
+    }
+
+    request.session["add_github_state"] = state
+    request.session["add_github_project"] = str(project.code)
+    return render(request, "integrations/add_github.html", ctx)
+
+
+@require_setting("GITHUB_CLIENT_ID")
+@login_required
+def add_github_select(request: HttpRequest) -> HttpResponse:
+    if "add_github_project" not in request.session:
+        return HttpResponseForbidden()
+
+    project_code = UUID(request.session["add_github_project"])
+    project = _get_rw_project_for_user(request, project_code)
+
+    # Exchange code for access token, store it in session
+    if "add_github_state" in request.session:
+        state = request.session.pop("add_github_state")
+        if request.GET.get("state") != state:
+            return HttpResponseForbidden()
+
+        code = request.GET["code"]
+        request.session["add_github_token"] = github.get_user_access_token(code)
+
+    if "add_github_token" not in request.session:
+        return HttpResponseForbidden()
+
+    install_url = f"{settings.GITHUB_PUBLIC_LINK}/installations/new"
+    repos = github.get_repos(request.session["add_github_token"])
+    if not repos:
+        return redirect(install_url)
+
+    request.session["add_github_repos"] = repos
+    ctx = {
+        "repo_names": sorted(repos.keys()),
+        "project": project,
+        "install_url": install_url,
+    }
+    return render(request, "integrations/add_github_form.html", ctx)
+
+
+@require_setting("GITHUB_CLIENT_ID")
+@login_required
+@require_POST
+def add_github_save(request: HttpRequest, code: UUID) -> HttpResponse:
+    project = _get_rw_project_for_user(request, code)
+
+    if "add_github_repos" not in request.session:
+        return HttpResponseForbidden()
+
+    form = forms.AddGitHubForm(request.POST)
+    if not form.is_valid():
+        return HttpResponseBadRequest()
+
+    request.session.pop("add_github_project")
+    request.session.pop("add_github_token")
+    repos = request.session.pop("add_github_repos")
+    repo_name = request.POST["repo_name"]
+    if repo_name not in repos:
+        return HttpResponseForbidden()
+
+    channel = Channel(kind="github", project=project)
+    channel.value = json.dumps(
+        {
+            "installation_id": repos[repo_name],
+            "repo": repo_name,
+            "labels": form.get_labels(),
+        }
+    )
+    channel.name = repo_name
+    channel.save()
+    channel.assign_all_checks()
+
+    messages.success(request, "Success, integration added!")
+    return redirect("hc-channels", project.code)
 
 
 # Forks: add custom views after this line

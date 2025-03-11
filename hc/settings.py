@@ -4,13 +4,16 @@ Django settings for healthchecks project.
 For the full list of settings and their values, see
 https://docs.djangoproject.com/en/4.2/ref/settings/
 """
+
 from __future__ import annotations
 
 import os
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
+from django.http.request import split_domain_port
 import django_stubs_ext
 
 import ldap
@@ -23,7 +26,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 def envbool(s: str, default: str) -> bool:
     v = os.getenv(s, default=default)
     if v not in ("", "True", "False"):
-        msg = "Unexpected value %s=%s, use 'True' or 'False'" % (s, v)
+        msg = f"Unexpected value {s}={v}, use 'True' or 'False'"
         raise Exception(msg)
     return v == "True"
 
@@ -39,13 +42,16 @@ def envint(s: str, default: str) -> int | None:
 SECRET_KEY = os.getenv("SECRET_KEY", "---")
 METRICS_KEY = os.getenv("METRICS_KEY")
 DEBUG = envbool("DEBUG", "True")
-ALLOWED_HOSTS = os.getenv("ALLOWED_HOSTS", "*").split(",")
 DEFAULT_FROM_EMAIL = os.getenv("DEFAULT_FROM_EMAIL", "healthchecks@example.org")
 SUPPORT_EMAIL = os.getenv("SUPPORT_EMAIL")
 USE_PAYMENTS = envbool("USE_PAYMENTS", "False")
 REGISTRATION_OPEN = envbool("REGISTRATION_OPEN", "True")
 if admins := os.getenv("ADMINS"):
     ADMINS = [(email, email) for email in admins.split(",")]
+
+if v := os.getenv("SECURE_PROXY_SSL_HEADER"):
+    SECURE_PROXY_SSL_HEADER = tuple(v.split(",", maxsplit=1))
+
 
 VERSION = ""
 
@@ -207,6 +213,10 @@ DATABASES: Mapping[str, Any] = {
     "default": {
         "ENGINE": "django.db.backends.sqlite3",
         "NAME": os.getenv("DB_NAME", BASE_DIR / "hc.sqlite"),
+        "OPTIONS": {
+            "init_command": "PRAGMA busy_timeout = 5000;",
+            "transaction_mode": "IMMEDIATE",
+        },
     }
 }
 
@@ -232,7 +242,7 @@ if os.getenv("DB") == "postgres":
         }
     }
 
-if os.getenv("DB") == "mysql":
+if os.getenv("DB") in ["mysql", "mariadb"]:
     DATABASES = {
         "default": {
             "ENGINE": "django.db.backends.mysql",
@@ -249,7 +259,7 @@ USE_TZ = True
 TIME_ZONE = "UTC"
 USE_I18N = False
 
-SITE_ROOT = os.getenv("SITE_ROOT", "http://localhost:8000")
+SITE_ROOT = os.getenv("SITE_ROOT", "http://localhost:8000").removesuffix("/")
 SITE_NAME = os.getenv("SITE_NAME", "Mychecks")
 SITE_LOGO_URL = os.getenv("SITE_LOGO_URL")
 MASTER_BADGE_LABEL = os.getenv("MASTER_BADGE_LABEL", SITE_NAME)
@@ -260,7 +270,17 @@ PING_BODY_LIMIT = envint("PING_BODY_LIMIT", "10000")
 # then we need to bump up DATA_UPLOAD_MAX_MEMORY_SIZE too:
 if PING_BODY_LIMIT and PING_BODY_LIMIT > 2621440:
     DATA_UPLOAD_MAX_MEMORY_SIZE = PING_BODY_LIMIT
-STATIC_URL = "/static/"
+_site_root_parts = urlparse(SITE_ROOT)
+LOGIN_URL = f"{_site_root_parts.path}/accounts/login/"
+STATIC_URL = f"{_site_root_parts.path}/static/"
+if v := os.getenv("ALLOWED_HOSTS"):
+    # If ALLOWED_HOSTS is set in environment, use it
+    ALLOWED_HOSTS = v.split(",")
+else:
+    # Otherwise, populate it with the domain from SITE_ROOT
+    domain, _ = split_domain_port(_site_root_parts.netloc)
+    ALLOWED_HOSTS = [domain]
+
 STATICFILES_DIRS = [BASE_DIR / "static"]
 STATIC_ROOT = BASE_DIR / "static-collected"
 STATICFILES_FINDERS = (
@@ -324,6 +344,11 @@ APPRISE_ENABLED = envbool("APPRISE_ENABLED", "False")
 DISCORD_CLIENT_ID = os.getenv("DISCORD_CLIENT_ID")
 DISCORD_CLIENT_SECRET = os.getenv("DISCORD_CLIENT_SECRET")
 
+# GitHub Issues
+GITHUB_CLIENT_ID = os.getenv("LINENOTIFY_CLIENT_ID")
+GITHUB_CLIENT_SECRET = os.getenv("GITHUB_CLIENT_SECRET")
+GITHUB_PRIVATE_KEY = os.getenv("GITHUB_PRIVATE_KEY")
+GITHUB_PUBLIC_LINK = os.getenv("GITHUB_PUBLIC_LINK")
 
 # LINE Notify
 LINENOTIFY_CLIENT_ID = os.getenv("LINENOTIFY_CLIENT_ID")

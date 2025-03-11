@@ -9,8 +9,9 @@ from email.message import EmailMessage
 from typing import Any, Protocol
 
 from aiosmtpd.controller import Controller
-from aiosmtpd.smtp import SMTP
+from aiosmtpd.smtp import SMTP, Envelope, Session
 from asgiref.sync import sync_to_async
+from django.conf import settings
 from django.core.management.base import BaseCommand
 from django.db import connection
 
@@ -23,18 +24,7 @@ RE_UUID = re.compile(
 
 
 class LogSink(Protocol):
-    def write(self, text: str) -> None:
-        ...
-
-
-class Session(Protocol):
-    peer: list[str]
-
-
-class Envelope(Protocol):
-    mail_from: str
-    content: bytes
-    rcpt_tos: list[str]
+    def write(self, msg: str) -> None: ...
 
 
 def _match(subject: str, keywords: str) -> bool:
@@ -109,13 +99,32 @@ class PingHandler:
         self.stdout = stdout
         self.process_message = sync_to_async(_process_message)
 
+    async def handle_RCPT(
+        self,
+        server: SMTP,
+        session: Session,
+        envelope: Envelope,
+        address: str,
+        rcpt_options: list[str],
+    ) -> str:
+        code, domain = address.split("@", maxsplit=1)
+        if domain != settings.PING_EMAIL_DOMAIN:
+            return "550 5.1.1 Recipient rejected"
+        if not RE_UUID.match(code):
+            return "550 5.1.1 Invalid mailbox"
+
+        envelope.rcpt_tos.append(address)
+        return "250 OK"
+
     async def handle_DATA(
         self, server: SMTP, session: Session, envelope: Envelope
     ) -> str:
         assert session.peer
         remote_addr = session.peer[0]
         mailfrom = envelope.mail_from
+        assert mailfrom
         data = envelope.content
+        assert isinstance(data, bytes)
         for mailto in envelope.rcpt_tos:
             result = await self.process_message(remote_addr, mailfrom, mailto, data)
             self.stdout.write(result)

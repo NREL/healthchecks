@@ -1,7 +1,7 @@
 # Server Configuration
 
 Healthchecks prepares its configuration in `hc/settings.py`. It reads configuration
-from environment variables. Below is a list of variables it reads and uses.
+from environment variables. Below is a list of environment variables it reads and uses.
 
 <ul class="self-hosted-configuration-toc">
 <li><a href="#ADMINS">ADMINS</a></li>
@@ -63,6 +63,7 @@ from environment variables. Below is a list of variables it reads and uses.
 <li><a href="#S3_TIMEOUT">S3_TIMEOUT</a></li>
 <li><a href="#S3_SECURE">S3_SECURE</a></li>
 <li><a href="#SECRET_KEY">SECRET_KEY</a></li>
+<li><a href="#SECURE_PROXY_SSL_HEADER">SECURE_PROXY_SSL_HEADER</a></li>
 <li><a href="#SHELL_ENABLED">SHELL_ENABLED</a></li>
 <li><a href="#SIGNAL_CLI_SOCKET">SIGNAL_CLI_SOCKET</a></li>
 <li><a href="#SITE_LOGO_URL">SITE_LOGO_URL</a></li>
@@ -92,7 +93,7 @@ from environment variables. Below is a list of variables it reads and uses.
 
 Default: `""` (empty string)
 
-A comma-sepparated list of email addresses to send code error notifications to.
+A comma-separated list of email addresses to send code error notifications to.
 When `DEBUG=False`, Healthchecks will send the details of exceptions raised in the
 request/response cycle to the listed addresses. Example:
 
@@ -105,18 +106,22 @@ SMTP credentials in the `EMAIL_...` environment variables.
 
 ## `ALLOWED_HOSTS` {: #ALLOWED_HOSTS }
 
-Default: `*`
+Default: the domain part of `SITE_ROOT`
 
-The host/domain names that this site can serve. You can specify multiple domain names
-by separating them with commas:
+The host/domain names that this site can serve. Healthchecks populates this setting
+automatically with the domain part of [SITE_ROOT](#SITE_ROOT). You do not need
+to set it unless you serve Healthchecks on more than one domain.
+
+If you do serve the same Healthchecks instance on more than one domain, specify
+them all in `ALLOWED_HOSTS`, separated by commas:
 
 ```ini
-ALLOWED_HOSTS=my-hc.example.org,alternative-name.example.org
+ALLOWED_HOSTS=first.example.org,second.example.org
 ```
 
-Apart from the comma-separated syntax, this is a standard Django setting.
+Aside from the comma-separated syntax, this is a standard Django setting.
 Read more about it in the
-[Django documentation](https://docs.djangoproject.com/en/4.2/ref/settings/#allowed-hosts).
+[Django documentation](https://docs.djangoproject.com/en/5.1/ref/settings/#allowed-hosts).
 
 ## `APPRISE_ENABLED` {: #APPRISE_ENABLED }
 
@@ -142,35 +147,35 @@ The database engine to use. Possible values: `sqlite`, `postgres`, `mysql`.
 Default: `0`
 
 This is a standard Django setting, read more in
-[Django documentation](https://docs.djangoproject.com/en/4.2/ref/settings/#conn-max-age).
+[Django documentation](https://docs.djangoproject.com/en/5.1/ref/settings/#conn-max-age).
 
 ## `DB_HOST` {: #DB_HOST }
 
 Default: `""` (empty string)
 
 This is a standard Django setting, read more in
-[Django documentation](https://docs.djangoproject.com/en/4.2/ref/settings/#host).
+[Django documentation](https://docs.djangoproject.com/en/5.1/ref/settings/#host).
 
 ## `DB_NAME` {: #DB_NAME }
 
 Default: `hc` (PostgreSQL, MySQL) or `/path/to/projectdir/hc.sqlite` (SQLite)
 
 This is a standard Django setting, read more in
-[Django documentation](https://docs.djangoproject.com/en/4.2/ref/settings/#name).
+[Django documentation](https://docs.djangoproject.com/en/5.1/ref/settings/#name).
 
 ## `DB_PASSWORD` {: #DB_PASSWORD }
 
 Default: `""` (empty string)
 
 This is a standard Django setting, read more in
-[Django documentation](https://docs.djangoproject.com/en/4.2/ref/settings/#password).
+[Django documentation](https://docs.djangoproject.com/en/5.1/ref/settings/#password).
 
 ## `DB_PORT` {: #DB_PORT }
 
 Default: `""` (empty string)
 
 This is a standard Django setting, read more in
-[Django documentation](https://docs.djangoproject.com/en/4.2/ref/settings/#port).
+[Django documentation](https://docs.djangoproject.com/en/5.1/ref/settings/#port).
 
 ## `DB_SSLMODE` {: #DB_SSLMODE }
 
@@ -189,7 +194,7 @@ PostgreSQL-specific, [details](https://www.postgresql.org/docs/10/libpq-connect.
 Default: `postgres` (PostgreSQL) or `root` (MySQL)
 
 This is a standard Django setting, read more in
-[Django documentation](https://docs.djangoproject.com/en/4.2/ref/settings/#user).
+[Django documentation](https://docs.djangoproject.com/en/5.1/ref/settings/#user).
 
 ## `DEBUG` {: #DEBUG }
 
@@ -200,14 +205,14 @@ A boolean that turns on/off debug mode.
 _Never run a Healthchecks instance in production with the debug mode turned on!_
 
 This is a standard Django setting, read more in
-[Django documentation](https://docs.djangoproject.com/en/4.2/ref/settings/#debug).
+[Django documentation](https://docs.djangoproject.com/en/5.1/ref/settings/#debug).
 
 ## `DEFAULT_FROM_EMAIL` {: #DEFAULT_FROM_EMAIL }
 
 Default: `healthchecks@example.org`
 
 This is a standard Django setting, read more in
-[Django documentation](https://docs.djangoproject.com/en/4.2/ref/settings/#default-from-email).
+[Django documentation](https://docs.djangoproject.com/en/5.1/ref/settings/#default-from-email).
 
 ## `DISCORD_CLIENT_ID` {: #DISCORD_CLIENT_ID }
 
@@ -239,42 +244,42 @@ The Discord Client Secret, required by the Discord integration. Look it up at
 Default: `""` (empty string)
 
 This is a standard Django setting, read more in
-[Django documentation](https://docs.djangoproject.com/en/4.2/ref/settings/#email-host).
+[Django documentation](https://docs.djangoproject.com/en/5.1/ref/settings/#email-host).
 
 ## `EMAIL_HOST_PASSWORD` {: #EMAIL_HOST_PASSWORD }
 
 Default: `""` (empty string)
 
 This is a standard Django setting, read more in
-[Django documentation](https://docs.djangoproject.com/en/4.2/ref/settings/#email-host-password).
+[Django documentation](https://docs.djangoproject.com/en/5.1/ref/settings/#email-host-password).
 
 ## `EMAIL_HOST_USER` {: #EMAIL_HOST_USER }
 
 Default: `""` (empty string)
 
 This is a standard Django setting, read more in
-[Django documentation](https://docs.djangoproject.com/en/4.2/ref/settings/#email-host-user).
+[Django documentation](https://docs.djangoproject.com/en/5.1/ref/settings/#email-host-user).
 
 ## `EMAIL_PORT` {: #EMAIL_PORT }
 
 Default: `587`
 
 This is a standard Django setting, read more in
-[Django documentation](https://docs.djangoproject.com/en/4.2/ref/settings/#email-port).
+[Django documentation](https://docs.djangoproject.com/en/5.1/ref/settings/#email-port).
 
 ## `EMAIL_USE_TLS` {: #EMAIL_USE_TLS }
 
 Default: `True`
 
 This is a standard Django setting, read more in
-[Django documentation](https://docs.djangoproject.com/en/4.2/ref/settings/#email-use-tls).
+[Django documentation](https://docs.djangoproject.com/en/5.1/ref/settings/#email-use-tls).
 
 ## `EMAIL_USE_SSL` {: #EMAIL_USE_SSL}
 
 Default: `False`
 
 This is a standard Django setting, read more in
-[Django documentation](https://docs.djangoproject.com/en/4.2/ref/settings/#email-use-ssl).
+[Django documentation](https://docs.djangoproject.com/en/5.1/ref/settings/#email-use-ssl).
 
 ## `EMAIL_USE_VERIFICATION` {: #EMAIL_USE_VERIFICATION }
 
@@ -597,16 +602,30 @@ When `REMOTE_USER_HEADER` is set, Healthchecks will:
  - automatically create a user account if it does not exist
  - disable the default authentication methods (login link to email, password)
 
- The header name in `REMOTE_USER_HEADER` must be specified in upper-case,
- with any dashes replaced with underscores, and prefixed with `HTTP_`. For
- example, if your authentication proxy sets a `X-Authenticated-User` request
- header, you should set `REMOTE_USER_HEADER=HTTP_X_AUTHENTICATED_USER`.
+The header name in `REMOTE_USER_HEADER` must be specified in upper-case,
+with any dashes replaced with underscores, and prefixed with `HTTP_`. For
+example, if your authentication proxy sets a `X-Authenticated-User` request
+header, you should set `REMOTE_USER_HEADER=HTTP_X_AUTHENTICATED_USER`.
 
 **Important:** When this option is enabled, **Healthchecks will trust the header's
 value implicitly**, so it is **very important** to ensure that attackers cannot
 set the value themselves (and thus impersonate any user). How to do this varies by
 your chosen proxy, but generally involves configuring it to strip out headers that
 normalize to the same name as the chosen identity header.
+
+**On using `local_settings.py`:**
+When Healthchecks reads settings from environment variables and encounters
+the `REMOTE_USER_HEADER` environment variable, it sets *two* settings,
+`REMOTE_USER_HEADER` and `AUTHENTICATION_BACKENDS`. This logic has already run by the
+time Healthchecks reads `local_settings.py`. Therefore, if you configure Healthchecks
+using the `local_settings.py` file instead of environment variables, and specify
+`REMOTE_USER_HEADER` there, you will also need a line which sets the other setting,
+`AUTHENTICATION_BACKENDS`:
+
+```
+REMOTE_USER_HEADER = "HTTP_X_AUTHENTICATED_USER"
+AUTHENTICATION_BACKENDS = ["hc.accounts.backends.CustomHeaderBackend"]
+```
 
 ## `ROCKETCHAT_ENABLED` {: #ROCKETCHAT_ENABLED }
 
@@ -691,7 +710,44 @@ A secret key used for cryptographic signing. Should be set to a unique,
 unpredictable value.
 
 This is a standard Django setting, read more in
-[Django documentation](https://docs.djangoproject.com/en/4.2/ref/settings/#secret-key).
+[Django documentation](https://docs.djangoproject.com/en/5.1/ref/settings/#secret-key).
+
+## `SECURE_PROXY_SSL_HEADER` {: #SECURE_PROXY_SSL_HEADER }
+
+Default: `None`
+
+Comma-separated HTTP header name and value that signifies a request is secure
+(made over https://). This information is important for CSRF protection.
+
+If Healthchecks is running behind a proxy, the proxy may be "swallowing" whether the original
+request uses HTTPS or not. In this case, you may see HTTP 403 errors when submitting
+forms (for example, trying to log in).
+
+If set, the value should contain the name of the header to look for and the required
+value, separated with comma. The header name must be specified in upper-case,
+with any dashes replaced with underscores, and prefixed with `HTTP_`. Example:
+
+```ini
+# environment variable
+SECURE_PROXY_SSL_HEADER=HTTP_X_FORWARDED_PROTO,https
+```
+
+You should *only* set this environment variable if you control your proxy or have some
+other guarantee that it sets/strips this header appropriately.
+
+**Note on using `local_settings.py`:**
+When Healthchecks reads settings from environment variables, it expects
+`SECURE_PROXY_SSL_HEADER` to contain header name and value, separated with comma.
+If you set `SECURE_PROXY_SSL_HEADER` in `local_settings.py`, it should be a tuple
+with two elements instead:
+
+```ini
+# in local_settings.py
+SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+```
+
+This environment variable maps to a standard Django setting, read more in
+[Django documentation](https://docs.djangoproject.com/en/5.1/ref/settings/#secure-proxy-ssl-header).
 
 ## `SHELL_ENABLED` {: #SHELL_ENABLED }
 
@@ -727,7 +783,7 @@ SIGNAL_CLI_SOCKET=example.org:7583
 ```
 
 Healthchecks uses [signal-cli](https://github.com/AsamK/signal-cli) to send Signal
-notifications. Healthcecks interacts with signal-cli over UNIX or TCP socket (requires
+notifications. Healthchecks interacts with signal-cli over UNIX or TCP socket (requires
 signal-cli 0.10.0 or later).
 
 To enable the Signal integration:
@@ -792,7 +848,31 @@ its web UI and documentation.
 Default: `http://localhost:8000`
 
 The base URL of this Healthchecks instance. Healthchecks uses `SITE_ROOT` whenever
-it needs to construct absolute URLs.
+it needs to construct absolute URLs. Healthchecks also uses `SITE_ROOT` to set
+several other settings, detailed below.
+
+If the [ALLOWED_HOSTS](#ALLOWED_HOSTS) setting is not set, Healthchecks
+automatically populates it with the domain part of `SITE_ROOT`. Under typical scenarios
+you can use the automatically populated value and do not need to set
+`ALLOWED_HOSTS` yourself.
+
+If the SITE_ROOT contains a path (for example, <code>http://localhost:8000<b>/prefix</b></code>),
+then Healthchecks automatically sets the following additional Django settings:
+
+* <code>LOGIN_URL=<b>/prefix</b>/accounts/login/</code>. Required
+for correct redirection to a log-in page when an unauthenticated user requests a
+page that requires authentication. `LOGIN_URL` is a standard Django setting, read more
+about it in
+[Django documentation](https://docs.djangoproject.com/en/5.1/ref/settings/#login-url).
+* <code>STATIC_URL=<b>/prefix</b>/static/</code>. Required for correct
+URL generation to static files (JS, CSS, images). `STATIC_URL` is a standard Django
+setting, read more about it in
+[Django documentation](https://docs.djangoproject.com/en/5.1/ref/settings/#static-url).
+
+**On using `local_settings.py`:** Healthchecks only sets the above additional settings
+if you specify `SITE_ROOT` via an environment variable. If you instead specify it in
+`local_settings.py`, you will also need to set `ALLOWED_HOSTS`, `LOGIN_URL`, and
+`STATIC_URL` there.
 
 ## `SLACK_CLIENT_ID` {: #SLACK_CLIENT_ID }
 

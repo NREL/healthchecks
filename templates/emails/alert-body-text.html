@@ -1,6 +1,9 @@
 {% load hc_extras humanize linemode %}{% linemode %}
 
 {% line %}The check "{{ check.name_then_code|safe }}" has gone {{ flip.new_status }}.{% endline %}
+{% if flip.reason %}
+{% line %}Reason: {{ flip.reason_long}}.{% endline %}
+{% endif %}
 {% line %}{% endline %}
 
 {% line %}View on {% site_name %}:{% endline %}

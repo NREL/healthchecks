@@ -5,22 +5,22 @@ from django.test.utils import override_settings
 from hc.test import BaseTestCase
 
 
-@override_settings(LINENOTIFY_CLIENT_ID="t1", LINENOTIFY_CLIENT_SECRET="s1")
-class AddLineNotifyTestCase(BaseTestCase):
+@override_settings(GITHUB_CLIENT_ID="fake-client-id")
+class AddGitHubTestCase(BaseTestCase):
     def setUp(self) -> None:
         super().setUp()
-        self.url = f"/projects/{self.project.code}/add_linenotify/"
+        self.url = f"/projects/{self.project.code}/add_github/"
 
-    def test_instructions_work(self) -> None:
+    def test_prompt_works(self) -> None:
         self.client.login(username="alice@example.org", password="password")
         r = self.client.get(self.url)
-        self.assertContains(r, "notify-bot.line.me/oauth/authorize", status_code=200)
-        self.assertContains(r, "Connect LINE Notify")
+        self.assertContains(r, "create an issue", status_code=200)
+        self.assertContains(r, "github.com/login/oauth/authorize")
 
-        # There should now be a key in session
-        self.assertTrue("add_linenotify" in self.client.session)
+        self.assertTrue("add_github_state" in self.client.session)
+        self.assertTrue("add_github_project" in self.client.session)
 
-    @override_settings(LINENOTIFY_CLIENT_ID=None)
+    @override_settings(GITHUB_CLIENT_ID=None)
     def test_it_requires_client_id(self) -> None:
         self.client.login(username="alice@example.org", password="password")
         r = self.client.get(self.url)

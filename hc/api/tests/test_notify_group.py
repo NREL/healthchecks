@@ -1,9 +1,6 @@
-# coding: utf-8
-
 from __future__ import annotations
 
 import json
-from datetime import timedelta as td
 
 from django.core import mail
 from django.test.utils import override_settings

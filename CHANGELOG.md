@@ -1,10 +1,83 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
-## v3.6-dev - Unreleased
+## v3.10-dev - Unreleased
+
+### Improvements
+- Add "badge_url" field in Check API responses (#1100)
+- Add support for Signal usernames
+- Update the "Currently running, started ... ago" template to use seconds precision
+- Implement S3 outage mitigation (don't attempt GetObject calls if many recent errors)
+- Add last ping body in MS Teams Workflows notifications (#1024)
+- Update "?rid=<uuid>" handling to allow UUIDs with uppercase letters (#1116, @wie-niet)
+- New integration: GitHub issues (#671)
+- Add support for passing Authorization header to Prometheus metrics endpoints
+
+### Bug Fixes
+- Fix incorrect status value in Webhook integration's $JSON placeholder
+
+## v3.9 - 2024-12-20
+
+### Improvements
+- Change the default value of ALLOWED_HOSTS from "*" to the domain part of SITE_ROOT
+
+### Bug Fixes
+- Fix fetchstatus.py (again) to handle SITE_ROOT with a path (#1108)
+
+## v3.8.2 - 2024-12-19
+
+### Improvements
+- Update notification templates to include failure reason (#1069)
+
+### Bug Fixes
+- Fix fetchstatus.py to handle SITE_ROOT with a path (#1107)
+
+## v3.8.1 - 2024-12-13
+
+### Improvements
+- Update Dockerfile to use Python 3.13.1
+- Improve Matrix notifications (include tags, period, last ping type etc.)
+
+## v3.8 - 2024-12-09
+
+### Improvements
+- Rewrite the docker/fetchstatus.py script to reduce Docker container CPU use (#1071)
+- Update Dockerfile to use Python 3.13
+- Update CustomHeaderMiddleware to normalize email addresses to lower case (#1074)
+- Add data migration to convert existing user account emails to lower case
+- Update email alerts to mention failure reason (#1069)
+- De-emphasize the unsubscribe link in email notifications
+- In the checks list, move the "Add Check" button to the top of the page
+- Implement filtering by status in the checks list page
+- Increase ntfy.sh topic max length to 64
+- Implement support for path in SITE_ROOT, e.g. SITE_ROOT=http://example.org/hc (#1091)
+
+### Bug Fixes
+- Improve recipient address validation in the smtp listener (#1077)
+
+## v3.7 - 2024-10-21
+
+### Improvements
+- Increase outgoing webhook timeout from 10 to 30 seconds
+- Remove `pruneflips` management command (now cleaned up automatically)
+- Remove `prunenotifications` management command (now cleaned up automatically)
+- Update settings.py to read SECURE_PROXY_SSL_HEADER from env vars
+- Remove LINE Notify onboarding form (as LINE Notify is shutting down on Apr 1, 2025)
+- Make slider labels clickable in the "Update Period & Grace" dialog (#1039)
+- Update the Signal integration to retry on network errors
+
+### Bug Fixes
+- Update sqlite settings to avoid "Database is locked" errors (#1057)
+- Fix API to gracefully handle too long slugs
+
+## v3.6 - 2024-09-04
+
+### Security
+- Upgrade to Django 5.1.1 (it fixes a vulnerability in `urlize` which we do use)
 
 ### Improvements
 - Implement concurrent sending and `--num-workers` argument in `manage.py sendalerts`
+- Upgrade from psycopg2 to psycopg 3.x
 
 ## v3.5.2 - 2024-08-21
 

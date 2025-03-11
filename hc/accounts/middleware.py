@@ -13,7 +13,7 @@ from hc.accounts.models import Profile
 MiddlewareFunc = Callable[[HttpRequest], HttpResponse]
 
 
-class TeamAccessMiddleware(object):
+class TeamAccessMiddleware:
     def __init__(self, get_response: MiddlewareFunc) -> None:
         self.get_response = get_response
 
@@ -25,7 +25,7 @@ class TeamAccessMiddleware(object):
         return self.get_response(request)
 
 
-class CustomHeaderMiddleware(object):
+class CustomHeaderMiddleware:
     """
     Middleware for utilizing Web-server-provided authentication.
 
@@ -53,6 +53,12 @@ class CustomHeaderMiddleware(object):
             if request.user.is_authenticated:
                 auth.logout(request)
             return self.get_response(request)
+
+        # The email address from the external authentication system may be in
+        # in upper case or mixed case. Convert it to lower case, as we do
+        # elsewhere in the system (when registering new users, when inviting users
+        # into projects, when changing email address) to avoid naming conflicts.
+        email = email.lower()
 
         # If the user is already authenticated and that user is the user we are
         # getting passed in the headers, then the correct user is already

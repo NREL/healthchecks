@@ -32,6 +32,12 @@ def _choices(csv: str) -> list[tuple[str, str]]:
 
 
 class LaxURLField(forms.URLField):
+    """Subclass of URLField which additionally accepts URLs without a tld.
+
+    For example, unlike URLField, it accepts "http://home_server"
+
+    """
+
     default_validators = [WebhookValidator()]
 
 
@@ -197,7 +203,7 @@ class EmailForm(forms.Form):
 
 class AddUrlForm(forms.Form):
     error_css_class = "has-error"
-    value = LaxURLField(max_length=1000)
+    value = LaxURLField(max_length=1000, assume_scheme="https")
 
 
 class WebhookForm(forms.Form):
@@ -207,12 +213,12 @@ class WebhookForm(forms.Form):
     method_down = forms.ChoiceField(initial="GET", choices=_choices("GET,POST,PUT"))
     body_down = forms.CharField(max_length=1000, required=False)
     headers_down = HeadersField(required=False)
-    url_down = LaxURLField(max_length=1000, required=False)
+    url_down = LaxURLField(max_length=1000, required=False, assume_scheme="https")
 
     method_up = forms.ChoiceField(initial="GET", choices=_choices("GET,POST,PUT"))
     body_up = forms.CharField(max_length=1000, required=False)
     headers_up = HeadersField(required=False)
-    url_up = LaxURLField(max_length=1000, required=False)
+    url_up = LaxURLField(max_length=1000, required=False, assume_scheme="https")
 
     def clean(self) -> None:
         super().clean()
@@ -281,6 +287,52 @@ class PhoneUpDownForm(PhoneNumberForm):
         )
 
 
+class SignalRecipientForm(forms.Form):
+    error_css_class = "has-error"
+    label = forms.CharField(max_length=100, required=False)
+    recipient = forms.CharField()
+
+    def clean_recipient(self) -> str:
+        v = self.cleaned_data["recipient"]
+
+        stripped = v.encode("ascii", "ignore").decode("ascii")
+        assert isinstance(stripped, str)
+        stripped = stripped.replace(" ", "").replace("-", "")
+        if "." in stripped:
+            # Assume it is a username
+            if not re.match(r"^\w{3,48}\.\d{2,10}$", stripped):
+                raise forms.ValidationError("Invalid username format.")
+        else:
+            # Assume it is a phone number
+            if not re.match(r"^\+\d{5,15}$", stripped):
+                raise forms.ValidationError("Invalid phone number format.")
+
+        return stripped
+
+
+class SignalForm(SignalRecipientForm):
+    up = forms.BooleanField(required=False, initial=True)
+    down = forms.BooleanField(required=False, initial=True)
+
+    def clean(self) -> None:
+        super().clean()
+
+        down = self.cleaned_data.get("down")
+        up = self.cleaned_data.get("up")
+
+        if not down and not up:
+            self.add_error("down", "Please select at least one.")
+
+    def get_json(self) -> str:
+        return json.dumps(
+            {
+                "value": self.cleaned_data["recipient"],
+                "up": self.cleaned_data["up"],
+                "down": self.cleaned_data["down"],
+            }
+        )
+
+
 class ChannelNameForm(forms.Form):
     name = forms.CharField(max_length=100, required=False)
 
@@ -319,7 +371,7 @@ class AddZulipForm(forms.Form):
     error_css_class = "has-error"
     bot_email = forms.EmailField(max_length=100)
     api_key = forms.CharField(max_length=50)
-    site = LaxURLField(max_length=100)
+    site = LaxURLField(max_length=100, assume_scheme="https")
     mtype = forms.ChoiceField(choices=ZULIP_TARGETS)
     to = forms.CharField(max_length=100)
     topic = forms.CharField(max_length=100, required=False)
@@ -329,7 +381,7 @@ class AddZulipForm(forms.Form):
 
 
 class AddTrelloForm(forms.Form):
-    token = forms.RegexField(regex=r"^[0-9a-fA-F]{64,256}$")
+    token = forms.CharField(max_length=1000)
     board_name = forms.CharField(max_length=100)
     list_name = forms.CharField(max_length=100)
     list_id = forms.RegexField(regex=r"^[0-9a-fA-F]{16,32}$")
@@ -341,7 +393,7 @@ class AddTrelloForm(forms.Form):
 class AddGotifyForm(forms.Form):
     error_css_class = "has-error"
     token = forms.CharField(max_length=50)
-    url = LaxURLField(max_length=1000)
+    url = LaxURLField(max_length=1000, assume_scheme="https")
 
     def get_value(self) -> str:
         return json.dumps(dict(self.cleaned_data), sort_keys=True)
@@ -367,8 +419,8 @@ class GroupForm(forms.Form):
 
 class NtfyForm(forms.Form):
     error_css_class = "has-error"
-    topic = forms.CharField(max_length=50)
-    url = LaxURLField(max_length=1000)
+    topic = forms.CharField(max_length=64)
+    url = LaxURLField(max_length=1000, assume_scheme="https")
     token = forms.CharField(max_length=100, required=False)
     priority = forms.IntegerField(initial=3, min_value=0, max_value=5)
     priority_up = forms.IntegerField(initial=3, min_value=0, max_value=5)
@@ -422,3 +474,18 @@ class BadgeSettingsForm(forms.Form):
     check = forms.UUIDField(required=False)
     fmt = forms.ChoiceField(choices=_choices("svg,json,shields"))
     states = forms.ChoiceField(choices=_choices("2,3"))
+
+
+class AddGitHubForm(forms.Form):
+    repo_name = forms.CharField(max_length=500)
+    labels = forms.CharField(max_length=500, required=False)
+
+    def get_labels(self) -> list[str]:
+        result = []
+
+        for part in self.cleaned_data["labels"].split(","):
+            part = part.strip()
+            if part != "":
+                result.append(part)
+
+        return result

@@ -1,6 +1,6 @@
 <h1>Server Configuration</h1>
 <p>Healthchecks prepares its configuration in <code>hc/settings.py</code>. It reads configuration
-from environment variables. Below is a list of variables it reads and uses.</p>
+from environment variables. Below is a list of environment variables it reads and uses.</p>
 <ul class="self-hosted-configuration-toc">
 <li><a href="#ADMINS">ADMINS</a></li>
 <li><a href="#ALLOWED_HOSTS">ALLOWED_HOSTS</a></li>
@@ -61,6 +61,7 @@ from environment variables. Below is a list of variables it reads and uses.</p>
 <li><a href="#S3_TIMEOUT">S3_TIMEOUT</a></li>
 <li><a href="#S3_SECURE">S3_SECURE</a></li>
 <li><a href="#SECRET_KEY">SECRET_KEY</a></li>
+<li><a href="#SECURE_PROXY_SSL_HEADER">SECURE_PROXY_SSL_HEADER</a></li>
 <li><a href="#SHELL_ENABLED">SHELL_ENABLED</a></li>
 <li><a href="#SIGNAL_CLI_SOCKET">SIGNAL_CLI_SOCKET</a></li>
 <li><a href="#SITE_LOGO_URL">SITE_LOGO_URL</a></li>
@@ -88,7 +89,7 @@ from environment variables. Below is a list of variables it reads and uses.</p>
 
 <h2 id="ADMINS"><code>ADMINS</code></h2>
 <p>Default: <code>""</code> (empty string)</p>
-<p>A comma-sepparated list of email addresses to send code error notifications to.
+<p>A comma-separated list of email addresses to send code error notifications to.
 When <code>DEBUG=False</code>, Healthchecks will send the details of exceptions raised in the
 request/response cycle to the listed addresses. Example:</p>
 <div class="highlight"><pre><span></span><code><span class="na">ADMINS</span><span class="o">=</span><span class="s">alice@example.org,bob@example.org</span>
@@ -97,15 +98,18 @@ request/response cycle to the listed addresses. Example:</p>
 <p>Note: for error notifications to work, make sure you have also specified working
 SMTP credentials in the <code>EMAIL_...</code> environment variables.</p>
 <h2 id="ALLOWED_HOSTS"><code>ALLOWED_HOSTS</code></h2>
-<p>Default: <code>*</code></p>
-<p>The host/domain names that this site can serve. You can specify multiple domain names
-by separating them with commas:</p>
-<div class="highlight"><pre><span></span><code><span class="na">ALLOWED_HOSTS</span><span class="o">=</span><span class="s">my-hc.example.org,alternative-name.example.org</span>
+<p>Default: the domain part of <code>SITE_ROOT</code></p>
+<p>The host/domain names that this site can serve. Healthchecks populates this setting
+automatically with the domain part of <a href="#SITE_ROOT">SITE_ROOT</a>. You do not need
+to set it unless you serve Healthchecks on more than one domain.</p>
+<p>If you do serve the same Healthchecks instance on more than one domain, specify
+them all in <code>ALLOWED_HOSTS</code>, separated by commas:</p>
+<div class="highlight"><pre><span></span><code><span class="na">ALLOWED_HOSTS</span><span class="o">=</span><span class="s">first.example.org,second.example.org</span>
 </code></pre></div>
 
-<p>Apart from the comma-separated syntax, this is a standard Django setting.
+<p>Aside from the comma-separated syntax, this is a standard Django setting.
 Read more about it in the
-<a href="https://docs.djangoproject.com/en/4.2/ref/settings/#allowed-hosts">Django documentation</a>.</p>
+<a href="https://docs.djangoproject.com/en/5.1/ref/settings/#allowed-hosts">Django documentation</a>.</p>
 <h2 id="APPRISE_ENABLED"><code>APPRISE_ENABLED</code></h2>
 <p>Default: <code>False</code></p>
 <p>A boolean that turns on/off the <a href="https://github.com/caronc/apprise">Apprise</a>
@@ -120,23 +124,23 @@ integration.</p>
 <h2 id="DB_CONN_MAX_AGE"><code>DB_CONN_MAX_AGE</code></h2>
 <p>Default: <code>0</code></p>
 <p>This is a standard Django setting, read more in
-<a href="https://docs.djangoproject.com/en/4.2/ref/settings/#conn-max-age">Django documentation</a>.</p>
+<a href="https://docs.djangoproject.com/en/5.1/ref/settings/#conn-max-age">Django documentation</a>.</p>
 <h2 id="DB_HOST"><code>DB_HOST</code></h2>
 <p>Default: <code>""</code> (empty string)</p>
 <p>This is a standard Django setting, read more in
-<a href="https://docs.djangoproject.com/en/4.2/ref/settings/#host">Django documentation</a>.</p>
+<a href="https://docs.djangoproject.com/en/5.1/ref/settings/#host">Django documentation</a>.</p>
 <h2 id="DB_NAME"><code>DB_NAME</code></h2>
 <p>Default: <code>hc</code> (PostgreSQL, MySQL) or <code>/path/to/projectdir/hc.sqlite</code> (SQLite)</p>
 <p>This is a standard Django setting, read more in
-<a href="https://docs.djangoproject.com/en/4.2/ref/settings/#name">Django documentation</a>.</p>
+<a href="https://docs.djangoproject.com/en/5.1/ref/settings/#name">Django documentation</a>.</p>
 <h2 id="DB_PASSWORD"><code>DB_PASSWORD</code></h2>
 <p>Default: <code>""</code> (empty string)</p>
 <p>This is a standard Django setting, read more in
-<a href="https://docs.djangoproject.com/en/4.2/ref/settings/#password">Django documentation</a>.</p>
+<a href="https://docs.djangoproject.com/en/5.1/ref/settings/#password">Django documentation</a>.</p>
 <h2 id="DB_PORT"><code>DB_PORT</code></h2>
 <p>Default: <code>""</code> (empty string)</p>
 <p>This is a standard Django setting, read more in
-<a href="https://docs.djangoproject.com/en/4.2/ref/settings/#port">Django documentation</a>.</p>
+<a href="https://docs.djangoproject.com/en/5.1/ref/settings/#port">Django documentation</a>.</p>
 <h2 id="DB_SSLMODE"><code>DB_SSLMODE</code></h2>
 <p>Default: <code>prefer</code></p>
 <p>PostgreSQL-specific, <a href="https://www.postgresql.org/docs/10/libpq-connect.html#LIBPQ-CONNECT-SSLMODE">details</a></p>
@@ -146,17 +150,17 @@ integration.</p>
 <h2 id="DB_USER"><code>DB_USER</code></h2>
 <p>Default: <code>postgres</code> (PostgreSQL) or <code>root</code> (MySQL)</p>
 <p>This is a standard Django setting, read more in
-<a href="https://docs.djangoproject.com/en/4.2/ref/settings/#user">Django documentation</a>.</p>
+<a href="https://docs.djangoproject.com/en/5.1/ref/settings/#user">Django documentation</a>.</p>
 <h2 id="DEBUG"><code>DEBUG</code></h2>
 <p>Default: <code>True</code></p>
 <p>A boolean that turns on/off debug mode.</p>
 <p><em>Never run a Healthchecks instance in production with the debug mode turned on!</em></p>
 <p>This is a standard Django setting, read more in
-<a href="https://docs.djangoproject.com/en/4.2/ref/settings/#debug">Django documentation</a>.</p>
+<a href="https://docs.djangoproject.com/en/5.1/ref/settings/#debug">Django documentation</a>.</p>
 <h2 id="DEFAULT_FROM_EMAIL"><code>DEFAULT_FROM_EMAIL</code></h2>
 <p>Default: <code>healthchecks@example.org</code></p>
 <p>This is a standard Django setting, read more in
-<a href="https://docs.djangoproject.com/en/4.2/ref/settings/#default-from-email">Django documentation</a>.</p>
+<a href="https://docs.djangoproject.com/en/5.1/ref/settings/#default-from-email">Django documentation</a>.</p>
 <h2 id="DISCORD_CLIENT_ID"><code>DISCORD_CLIENT_ID</code></h2>
 <p>Default: <code>None</code></p>
 <p>The Discord Client ID, required by the Discord integration.</p>
@@ -179,27 +183,27 @@ integration.</p>
 <h2 id="EMAIL_HOST"><code>EMAIL_HOST</code></h2>
 <p>Default: <code>""</code> (empty string)</p>
 <p>This is a standard Django setting, read more in
-<a href="https://docs.djangoproject.com/en/4.2/ref/settings/#email-host">Django documentation</a>.</p>
+<a href="https://docs.djangoproject.com/en/5.1/ref/settings/#email-host">Django documentation</a>.</p>
 <h2 id="EMAIL_HOST_PASSWORD"><code>EMAIL_HOST_PASSWORD</code></h2>
 <p>Default: <code>""</code> (empty string)</p>
 <p>This is a standard Django setting, read more in
-<a href="https://docs.djangoproject.com/en/4.2/ref/settings/#email-host-password">Django documentation</a>.</p>
+<a href="https://docs.djangoproject.com/en/5.1/ref/settings/#email-host-password">Django documentation</a>.</p>
 <h2 id="EMAIL_HOST_USER"><code>EMAIL_HOST_USER</code></h2>
 <p>Default: <code>""</code> (empty string)</p>
 <p>This is a standard Django setting, read more in
-<a href="https://docs.djangoproject.com/en/4.2/ref/settings/#email-host-user">Django documentation</a>.</p>
+<a href="https://docs.djangoproject.com/en/5.1/ref/settings/#email-host-user">Django documentation</a>.</p>
 <h2 id="EMAIL_PORT"><code>EMAIL_PORT</code></h2>
 <p>Default: <code>587</code></p>
 <p>This is a standard Django setting, read more in
-<a href="https://docs.djangoproject.com/en/4.2/ref/settings/#email-port">Django documentation</a>.</p>
+<a href="https://docs.djangoproject.com/en/5.1/ref/settings/#email-port">Django documentation</a>.</p>
 <h2 id="EMAIL_USE_TLS"><code>EMAIL_USE_TLS</code></h2>
 <p>Default: <code>True</code></p>
 <p>This is a standard Django setting, read more in
-<a href="https://docs.djangoproject.com/en/4.2/ref/settings/#email-use-tls">Django documentation</a>.</p>
+<a href="https://docs.djangoproject.com/en/5.1/ref/settings/#email-use-tls">Django documentation</a>.</p>
 <h2 id="EMAIL_USE_SSL"><code>EMAIL_USE_SSL</code></h2>
 <p>Default: <code>False</code></p>
 <p>This is a standard Django setting, read more in
-<a href="https://docs.djangoproject.com/en/4.2/ref/settings/#email-use-ssl">Django documentation</a>.</p>
+<a href="https://docs.djangoproject.com/en/5.1/ref/settings/#email-use-ssl">Django documentation</a>.</p>
 <h2 id="EMAIL_USE_VERIFICATION"><code>EMAIL_USE_VERIFICATION</code></h2>
 <p>Default: <code>True</code></p>
 <p>A boolean that turns on/off a verification step when adding an email integration.</p>
@@ -423,14 +427,26 @@ setting to integrate Healthchecks with it.</p>
 <li>disable the default authentication methods (login link to email, password)</li>
 </ul>
 <p>The header name in <code>REMOTE_USER_HEADER</code> must be specified in upper-case,
- with any dashes replaced with underscores, and prefixed with <code>HTTP_</code>. For
- example, if your authentication proxy sets a <code>X-Authenticated-User</code> request
- header, you should set <code>REMOTE_USER_HEADER=HTTP_X_AUTHENTICATED_USER</code>.</p>
+with any dashes replaced with underscores, and prefixed with <code>HTTP_</code>. For
+example, if your authentication proxy sets a <code>X-Authenticated-User</code> request
+header, you should set <code>REMOTE_USER_HEADER=HTTP_X_AUTHENTICATED_USER</code>.</p>
 <p><strong>Important:</strong> When this option is enabled, <strong>Healthchecks will trust the header's
 value implicitly</strong>, so it is <strong>very important</strong> to ensure that attackers cannot
 set the value themselves (and thus impersonate any user). How to do this varies by
 your chosen proxy, but generally involves configuring it to strip out headers that
 normalize to the same name as the chosen identity header.</p>
+<p><strong>On using <code>local_settings.py</code>:</strong>
+When Healthchecks reads settings from environment variables and encounters
+the <code>REMOTE_USER_HEADER</code> environment variable, it sets <em>two</em> settings,
+<code>REMOTE_USER_HEADER</code> and <code>AUTHENTICATION_BACKENDS</code>. This logic has already run by the
+time Healthchecks reads <code>local_settings.py</code>. Therefore, if you configure Healthchecks
+using the <code>local_settings.py</code> file instead of environment variables, and specify
+<code>REMOTE_USER_HEADER</code> there, you will also need a line which sets the other setting,
+<code>AUTHENTICATION_BACKENDS</code>:</p>
+<div class="highlight"><pre><span></span><code><span class="n">REMOTE_USER_HEADER</span> <span class="o">=</span> <span class="s">&quot;HTTP_X_AUTHENTICATED_USER&quot;</span>
+<span class="n">AUTHENTICATION_BACKENDS</span> <span class="o">=</span> <span class="p">[</span><span class="s">&quot;hc.accounts.backends.CustomHeaderBackend&quot;</span><span class="p">]</span>
+</code></pre></div>
+
 <h2 id="ROCKETCHAT_ENABLED"><code>ROCKETCHAT_ENABLED</code></h2>
 <p>Default: <code>True</code></p>
 <p>A boolean that turns on/off the Rocket.Chat integration. Enabled by default.</p>
@@ -482,7 +498,34 @@ use unencrypted HTTP requests, set this value to <code>False</code>.</p>
 <p>A secret key used for cryptographic signing. Should be set to a unique,
 unpredictable value.</p>
 <p>This is a standard Django setting, read more in
-<a href="https://docs.djangoproject.com/en/4.2/ref/settings/#secret-key">Django documentation</a>.</p>
+<a href="https://docs.djangoproject.com/en/5.1/ref/settings/#secret-key">Django documentation</a>.</p>
+<h2 id="SECURE_PROXY_SSL_HEADER"><code>SECURE_PROXY_SSL_HEADER</code></h2>
+<p>Default: <code>None</code></p>
+<p>Comma-separated HTTP header name and value that signifies a request is secure
+(made over https://). This information is important for CSRF protection.</p>
+<p>If Healthchecks is running behind a proxy, the proxy may be "swallowing" whether the original
+request uses HTTPS or not. In this case, you may see HTTP 403 errors when submitting
+forms (for example, trying to log in).</p>
+<p>If set, the value should contain the name of the header to look for and the required
+value, separated with comma. The header name must be specified in upper-case,
+with any dashes replaced with underscores, and prefixed with <code>HTTP_</code>. Example:</p>
+<div class="highlight"><pre><span></span><code><span class="c1"># environment variable</span>
+<span class="na">SECURE_PROXY_SSL_HEADER</span><span class="o">=</span><span class="s">HTTP_X_FORWARDED_PROTO,https</span>
+</code></pre></div>
+
+<p>You should <em>only</em> set this environment variable if you control your proxy or have some
+other guarantee that it sets/strips this header appropriately.</p>
+<p><strong>Note on using <code>local_settings.py</code>:</strong>
+When Healthchecks reads settings from environment variables, it expects
+<code>SECURE_PROXY_SSL_HEADER</code> to contain header name and value, separated with comma.
+If you set <code>SECURE_PROXY_SSL_HEADER</code> in <code>local_settings.py</code>, it should be a tuple
+with two elements instead:</p>
+<div class="highlight"><pre><span></span><code><span class="c1"># in local_settings.py</span>
+<span class="na">SECURE_PROXY_SSL_HEADER</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">(&quot;HTTP_X_FORWARDED_PROTO&quot;, &quot;https&quot;)</span>
+</code></pre></div>
+
+<p>This environment variable maps to a standard Django setting, read more in
+<a href="https://docs.djangoproject.com/en/5.1/ref/settings/#secure-proxy-ssl-header">Django documentation</a>.</p>
 <h2 id="SHELL_ENABLED"><code>SHELL_ENABLED</code></h2>
 <p>Default: <code>False</code></p>
 <p>A boolean that turns on/off the "Shell Commands" integration.</p>
@@ -505,7 +548,7 @@ TCP socket.</p>
 </code></pre></div>
 
 <p>Healthchecks uses <a href="https://github.com/AsamK/signal-cli">signal-cli</a> to send Signal
-notifications. Healthcecks interacts with signal-cli over UNIX or TCP socket (requires
+notifications. Healthchecks interacts with signal-cli over UNIX or TCP socket (requires
 signal-cli 0.10.0 or later).</p>
 <p>To enable the Signal integration:</p>
 <ul>
@@ -552,7 +595,29 @@ its web UI and documentation.</p>
 <h2 id="SITE_ROOT"><code>SITE_ROOT</code></h2>
 <p>Default: <code>http://localhost:8000</code></p>
 <p>The base URL of this Healthchecks instance. Healthchecks uses <code>SITE_ROOT</code> whenever
-it needs to construct absolute URLs.</p>
+it needs to construct absolute URLs. Healthchecks also uses <code>SITE_ROOT</code> to set
+several other settings, detailed below.</p>
+<p>If the <a href="#ALLOWED_HOSTS">ALLOWED_HOSTS</a> setting is not set, Healthchecks
+automatically populates it with the domain part of <code>SITE_ROOT</code>. Under typical scenarios
+you can use the automatically populated value and do not need to set
+<code>ALLOWED_HOSTS</code> yourself.</p>
+<p>If the SITE_ROOT contains a path (for example, <code>http://localhost:8000<b>/prefix</b></code>),
+then Healthchecks automatically sets the following additional Django settings:</p>
+<ul>
+<li><code>LOGIN_URL=<b>/prefix</b>/accounts/login/</code>. Required
+for correct redirection to a log-in page when an unauthenticated user requests a
+page that requires authentication. <code>LOGIN_URL</code> is a standard Django setting, read more
+about it in
+<a href="https://docs.djangoproject.com/en/5.1/ref/settings/#login-url">Django documentation</a>.</li>
+<li><code>STATIC_URL=<b>/prefix</b>/static/</code>. Required for correct
+URL generation to static files (JS, CSS, images). <code>STATIC_URL</code> is a standard Django
+setting, read more about it in
+<a href="https://docs.djangoproject.com/en/5.1/ref/settings/#static-url">Django documentation</a>.</li>
+</ul>
+<p><strong>On using <code>local_settings.py</code>:</strong> Healthchecks only sets the above additional settings
+if you specify <code>SITE_ROOT</code> via an environment variable. If you instead specify it in
+<code>local_settings.py</code>, you will also need to set <code>ALLOWED_HOSTS</code>, <code>LOGIN_URL</code>, and
+<code>STATIC_URL</code> there.</p>
 <h2 id="SLACK_CLIENT_ID"><code>SLACK_CLIENT_ID</code></h2>
 <p>Default: <code>None</code></p>
 <p>The Slack Client ID, used by the Healthchecks integration for Slack.</p>

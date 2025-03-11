@@ -123,21 +123,6 @@
     {% if rw %}
     <h1 class="ai-title">Add More</h1>
     <ul class="add-integration">
-        {% if enable_slack %}
-        <li>
-            <img src="{% static 'img/integrations/slack.png' %}"
-                class="icon" alt="Slack icon" />
-
-            <h2>Slack</h2>
-            <p>A messaging app for teams.</p>
-            {% if enable_slack_btn %}
-            <a href="{% url 'hc-add-slack-btn' project.code %}" class="btn btn-primary">Add Integration</a>
-            {% else %}
-            <a href="{% url 'hc-add-slack' project.code %}" class="btn btn-primary">Add Integration</a>
-            {% endif %}
-        </li>
-        {% endif %}
-
         <li>
             <img src="{% static 'img/integrations/email.png' %}"
                 class="icon" alt="Email icon" />
@@ -180,6 +165,15 @@
         </li>
         {% endif %}
 
+        {% if enable_github %}
+        <li>
+            <img src="{% static 'img/integrations/github.png' %}" class="icon kind-github" alt="GitHub icon" />
+            <h2>GitHub Issues</h2>
+            <p> Create a GitHub issue when a check goes down.</p>
+            <a href="{% url 'hc-add-github' project.code %}" class="btn btn-primary">Add Integration</a>
+        </li>
+        {% endif %}
+
         <li>
             <img src="{% static 'img/integrations/gotify.png' %}" class="icon" alt="Gotify icon" />
             <h2>Gotify</h2>
@@ -193,17 +187,6 @@
             <p> Deliver to multiple integrations at once.</p>
             <a href="{% url 'hc-add-group' project.code %}" class="btn btn-primary">Add Integration</a>
         </li>
-
-        {% if enable_linenotify %}
-        <li>
-            <img src="{% static 'img/integrations/linenotify.png' %}"
-                class="icon" alt="LINE Notify icon" />
-
-            <h2>LINE Notify</h2>
-            <p>Receive a notification on LINE when a check goes up or down.</p>
-            <a href="{% url 'hc-add-linenotify' project.code %}" class="btn btn-primary">Add Integration</a>
-        </li>
-        {% endif %}
 
         {% if enable_matrix %}
         <li>
@@ -354,6 +337,21 @@
             <h2>Signal</h2>
             <p>Get a Signal message when a check goes up or down.</p>
             <a href="{% url 'hc-add-signal' project.code %}" class="btn btn-primary">Add Integration</a>
+        </li>
+        {% endif %}
+
+        {% if enable_slack %}
+        <li>
+            <img src="{% static 'img/integrations/slack.png' %}"
+                class="icon" alt="Slack icon" />
+
+            <h2>Slack</h2>
+            <p>A messaging app for teams.</p>
+            {% if enable_slack_btn %}
+            <a href="{% url 'hc-add-slack-btn' project.code %}" class="btn btn-primary">Add Integration</a>
+            {% else %}
+            <a href="{% url 'hc-add-slack' project.code %}" class="btn btn-primary">Add Integration</a>
+            {% endif %}
         </li>
         {% endif %}
 

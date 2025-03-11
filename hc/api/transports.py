@@ -24,7 +24,7 @@ from hc.front.templatetags.hc_extras import (
     fix_asterisks,
     sortchecks,
 )
-from hc.lib import curl, emails
+from hc.lib import curl, emails, github
 from hc.lib.date import format_duration
 from hc.lib.html import extract_signal_styles
 from hc.lib.signing import sign_bounce_id
@@ -80,7 +80,7 @@ class TransportError(Exception):
         self.permanent = permanent
 
 
-class Transport(object):
+class Transport:
     def __init__(self, channel: Channel):
         self.channel = channel
 
@@ -146,9 +146,9 @@ class Email(Transport):
         unsub_link = self.channel.get_unsub_link()
 
         headers = {
-            "List-Unsubscribe": "<%s>" % unsub_link,
+            "List-Unsubscribe": f"<{unsub_link}>",
             "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
-            "X-Bounce-ID": sign_bounce_id("n.%s" % notification.code),
+            "X-Bounce-ID": sign_bounce_id(f"n.{notification.code}"),
         }
 
         from hc.accounts.models import Profile
@@ -258,7 +258,7 @@ class HttpTransport(Transport):
                 json=json,
                 headers=headers,
                 auth=auth,
-                timeout=10,
+                timeout=30,
             )
             if r.status_code not in (200, 201, 202, 204):
                 cls.raise_for_response(r)
@@ -278,7 +278,6 @@ class HttpTransport(Transport):
         headers: curl.Headers = None,
         auth: curl.Auth = None,
     ) -> None:
-        start = time.time()
         tries_left = 3 if retry else 1
         while True:
             try:
@@ -293,11 +292,9 @@ class HttpTransport(Transport):
                 )
             except TransportError as e:
                 tries_left = 0 if e.permanent else tries_left - 1
-
-                # If we have no tries left *or* have already used more than
-                # 15 seconds of time then abort the retry loop by re-raising
+                # If we have no tries left then abort the retry loop by re-raising
                 # the exception:
-                if tries_left == 0 or time.time() - start > 15:
+                if tries_left == 0:
                     raise e
 
     # Convenience wrapper around self.request for making "POST" requests
@@ -439,6 +436,7 @@ class Slackalike(HttpTransport):
                     "mrkdwn_in": ["fields"],
                     "title": f"“{name}” is {flip.new_status.upper()}.",
                     "title_link": check.cloaked_url(),
+                    "text": f"Reason: {flip.reason_long()}." if flip.reason else None,
                     "fields": fields,
                 }
             ],
@@ -548,7 +546,7 @@ class Opsgenie(HttpTransport):
 
         headers = {
             "Content-Type": "application/json",
-            "Authorization": "GenieKey %s" % self.channel.opsgenie.key,
+            "Authorization": f"GenieKey {self.channel.opsgenie.key}",
         }
 
         check = flip.owner
@@ -558,7 +556,7 @@ class Opsgenie(HttpTransport):
         }
 
         if flip.new_status == "down":
-            ctx = {"check": check, "ping": self.last_ping(flip)}
+            ctx = {"flip": flip, "check": check, "ping": self.last_ping(flip)}
             payload["tags"] = cast(JSONValue, check.tags_list())
             payload["message"] = tmpl("opsgenie_message.html", **ctx)
             payload["description"] = check.desc
@@ -618,7 +616,8 @@ class PagerDuty(HttpTransport):
             details["Schedule"] = check.schedule
             details["Time zone"] = check.tz
 
-        description = tmpl("pd_description.html", check=check, status=flip.new_status)
+        ctx = {"flip": flip, "check": check, "status": flip.new_status}
+        description = tmpl("pd_description.html", **ctx)
         payload = {
             "service_key": self.channel.pd.service_key,
             "incident_key": check.unique_key,
@@ -640,6 +639,7 @@ class PagerTree(HttpTransport):
         url = self.channel.value
         headers = {"Content-Type": "application/json"}
         ctx = {
+            "flip": flip,
             "check": flip.owner,
             "status": flip.new_status,
             "ping": self.last_ping(flip),
@@ -651,7 +651,7 @@ class PagerTree(HttpTransport):
             "description": tmpl("pagertree_description.html", **ctx),
             "client": settings.SITE_NAME,
             "client_url": settings.SITE_ROOT,
-            "tags": ",".join(flip.owner.tags_list()),
+            "tags": " ".join(flip.owner.tags_list()),
         }
 
         self.post(url, json=payload, headers=headers)
@@ -666,9 +666,9 @@ class Pushbullet(HttpTransport):
         }
         text = tmpl(
             "pushbullet_message.html",
+            flip=flip,
             check=flip.owner,
             status=flip.new_status,
-            ping=self.last_ping(flip),
         )
         payload = {"type": "note", "title": settings.SITE_NAME, "body": text}
         self.post(url, json=payload, headers=headers)
@@ -732,6 +732,7 @@ class Pushover(HttpTransport):
             self.post(url, data=cancel_payload)
 
         ctx = {
+            "flip": flip,
             "check": check,
             "status": flip.new_status,
             "ping": self.last_ping(flip),
@@ -770,7 +771,7 @@ class RocketChat(HttpTransport):
         result: JSONDict = {
             "alias": settings.SITE_NAME,
             "avatar": absolute_site_logo_url(),
-            "text": f"[{check.name_then_code()}]({url}) is {flip.new_status.upper()}.",
+            "text": tmpl("rocketchat_message.html", flip=flip, check=check),
             "attachments": [{"color": color, "fields": fields}],
         }
 
@@ -823,9 +824,9 @@ class VictorOps(HttpTransport):
             raise TransportError("Splunk On-Call notifications are not enabled.")
 
         ctx = {
+            "flip": flip,
             "check": flip.owner,
             "status": flip.new_status,
-            "ping": self.last_ping(flip),
         }
         mtype = "CRITICAL" if flip.new_status == "down" else "RECOVERY"
         payload = {
@@ -841,19 +842,23 @@ class VictorOps(HttpTransport):
 
 class Matrix(HttpTransport):
     def get_url(self) -> str:
-        s = quote(self.channel.value)
+        room_id = quote(self.channel.value)
 
         assert isinstance(settings.MATRIX_HOMESERVER, str)
         url = settings.MATRIX_HOMESERVER
-        url += "/_matrix/client/r0/rooms/%s/send/m.room.message?" % s
+        url += f"/_matrix/client/r0/rooms/{room_id}/send/m.room.message?"
         url += urlencode({"access_token": settings.MATRIX_ACCESS_TOKEN})
         return url
 
     def notify(self, flip: Flip, notification: Notification) -> None:
+        ping = self.last_ping(flip)
         ctx = {
+            "flip": flip,
             "check": flip.owner,
             "status": flip.new_status,
-            "ping": self.last_ping(flip),
+            "ping": ping,
+            "body": get_ping_body(ping, maxlen=1000),
+            "down_checks": self.down_checks(flip.owner),
         }
         plain = tmpl("matrix_description.html", **ctx)
         formatted = tmpl("matrix_description_formatted.html", **ctx)
@@ -926,6 +931,7 @@ class Telegram(HttpTransport):
 
         ping = self.last_ping(flip)
         ctx = {
+            "flip": flip,
             "check": flip.owner,
             "status": flip.new_status,
             "down_checks": self.down_checks(flip.owner),
@@ -983,9 +989,9 @@ class Sms(HttpTransport):
         auth = (settings.TWILIO_ACCOUNT, settings.TWILIO_AUTH)
         text = tmpl(
             "sms_message.html",
+            flip=flip,
             check=flip.owner,
             status=flip.new_status,
-            ping=self.last_ping(flip),
             site_name=settings.SITE_NAME,
         )
 
@@ -993,6 +999,7 @@ class Sms(HttpTransport):
             "To": self.channel.phone.value,
             "Body": text,
             "StatusCallback": notification.status_url(),
+            "RiskCheck": "disable",
         }
 
         if settings.TWILIO_MESSAGING_SERVICE_SID:
@@ -1223,7 +1230,28 @@ class MsTeamsWorkflow(HttpTransport):
         check = flip.owner
         name = check.name_then_code()
         fields = SlackFields()
-        indicator = "🔴" if flip.new_status == "down" else "🟢"
+        ctx = {
+            "flip": flip,
+            "check": flip.owner,
+            "status": flip.new_status,
+        }
+        text = tmpl("msteamsw_message.html", **ctx)
+
+        blocks: JSONList = [
+            {
+                "type": "TextBlock",
+                "text": text,
+                "weight": "bolder",
+                "size": "medium",
+                "wrap": True,
+                "style": "heading",
+            },
+            {
+                "type": "FactSet",
+                "facts": fields,
+            },
+        ]
+
         result: JSONDict = {
             "type": "message",
             "attachments": [
@@ -1235,20 +1263,7 @@ class MsTeamsWorkflow(HttpTransport):
                         "type": "AdaptiveCard",
                         "fallbackText": f"“{escape(name)}” is {flip.new_status.upper()}.",
                         "version": "1.2",
-                        "body": [
-                            {
-                                "type": "TextBlock",
-                                "text": f"{indicator} “{escape(name)}” is {flip.new_status.upper()}.",
-                                "weight": "bolder",
-                                "size": "medium",
-                                "wrap": True,
-                                "style": "heading",
-                            },
-                            {
-                                "type": "FactSet",
-                                "facts": fields,
-                            },
-                        ],
+                        "body": blocks,
                         "actions": [
                             {
                                 "type": "Action.OpenUrl",
@@ -1284,6 +1299,22 @@ class MsTeamsWorkflow(HttpTransport):
         else:
             fields.add("Total Pings:", "0")
             fields.add("Last Ping:", "Never")
+
+        if body := get_ping_body(ping, maxlen=1000):
+            blocks.append(
+                {
+                    "type": "TextBlock",
+                    "text": "Last Ping Body:",
+                    "weight": "bolder",
+                }
+            )
+            blocks.append(
+                {
+                    "type": "CodeBlock",
+                    "codeSnippet": body,
+                    "language": "PlainText",
+                }
+            )
 
         return result
 
@@ -1321,9 +1352,9 @@ class Zulip(HttpTransport):
         auth = (self.channel.zulip.bot_email, self.channel.zulip.api_key)
         content = tmpl(
             "zulip_content.html",
+            flip=flip,
             check=flip.owner,
             status=flip.new_status,
-            ping=self.last_ping(flip),
         )
         data = {
             "type": self.channel.zulip.mtype,
@@ -1343,6 +1374,7 @@ class Spike(HttpTransport):
         url = self.channel.value
         headers = {"Content-Type": "application/json"}
         ctx = {
+            "flip": flip,
             "check": flip.owner,
             "status": flip.new_status,
             "ping": self.last_ping(flip),
@@ -1363,7 +1395,7 @@ class LineNotify(HttpTransport):
     def notify(self, flip: Flip, notification: Notification) -> None:
         headers = {
             "Content-Type": "application/x-www-form-urlencoded",
-            "Authorization": "Bearer %s" % self.channel.linenotify_token,
+            "Authorization": f"Bearer {self.channel.linenotify_token}",
         }
         ctx = {
             "check": flip.owner,
@@ -1417,6 +1449,9 @@ class Signal(Transport):
     @classmethod
     def send(cls, recipient: str, message: str) -> None:
         plaintext, styles = extract_signal_styles(message)
+        if "." in recipient:
+            # usernames must be prefixed with "u:"
+            recipient = f"u:{recipient}"
         payload = {
             "jsonrpc": "2.0",
             "method": "send",
@@ -1450,7 +1485,10 @@ class Signal(Transport):
                     raise SignalRateLimitFailure(result.token, reply_bytes)
 
             msg = f"signal-cli call failed ({reply.error.code})"
-            logger.error(msg)
+            msg_with_reply = msg + "\n" + reply_bytes.decode()
+            # Include signal-cli reply in the message we log for ourselves
+            logger.error(msg_with_reply)
+            # Do not include signal-cli reply in the message we show to the user
             raise TransportError(msg)
 
     @classmethod
@@ -1500,7 +1538,7 @@ class Signal(Transport):
                         raise TransportError("signal-cli call timed out")
 
             except OSError as e:
-                msg = "signal-cli call failed (%s)" % e
+                msg = f"signal-cli call failed ({e})"
                 # Log the exception, so any configured logging handlers can pick it up
                 logger.exception(msg)
 
@@ -1517,19 +1555,27 @@ class Signal(Transport):
             raise TransportError("Rate limit exceeded")
 
         ctx = {
+            "flip": flip,
             "check": flip.owner,
             "status": flip.new_status,
             "ping": self.last_ping(flip),
             "down_checks": self.down_checks(flip.owner),
         }
         text = tmpl("signal_message.html", **ctx)
-        try:
-            self.send(self.channel.phone.value, text)
-        except SignalRateLimitFailure as e:
-            self.channel.send_signal_captcha_alert(e.token, e.reply.decode())
-            plaintext, _ = extract_signal_styles(text)
-            self.channel.send_signal_rate_limited_notice(text, plaintext)
-            raise e
+        tries_left = 2
+        while True:
+            try:
+                return self.send(self.channel.phone.value, text)
+            except SignalRateLimitFailure as e:
+                self.channel.send_signal_captcha_alert(e.token, e.reply.decode())
+                plaintext, _ = extract_signal_styles(text)
+                self.channel.send_signal_rate_limited_notice(text, plaintext)
+                raise e
+            except TransportError as e:
+                tries_left -= 1
+                if e.permanent or tries_left == 0:
+                    raise e
+                logger.debug("Retrying signal-cli call")
 
 
 class Gotify(HttpTransport):
@@ -1542,9 +1588,9 @@ class Gotify(HttpTransport):
         url += "?" + urlencode({"token": self.channel.gotify.token})
 
         ctx = {
+            "flip": flip,
             "check": flip.owner,
             "status": flip.new_status,
-            "ping": self.last_ping(flip),
             "down_checks": self.down_checks(flip.owner),
         }
         payload = {
@@ -1586,6 +1632,7 @@ class Ntfy(HttpTransport):
 
     def notify(self, flip: Flip, notification: Notification) -> None:
         ctx = {
+            "flip": flip,
             "check": flip.owner,
             "status": flip.new_status,
             "ping": self.last_ping(flip),
@@ -1606,8 +1653,47 @@ class Ntfy(HttpTransport):
             ],
         }
 
+        url = self.channel.ntfy.url
         headers = {}
         if self.channel.ntfy.token:
             headers = {"Authorization": f"Bearer {self.channel.ntfy.token}"}
 
-        self.post(self.channel.ntfy.url, headers=headers, json=payload)
+        # Give up database connection before potentially long network IO:
+        close_old_connections()
+        self.post(url, headers=headers, json=payload)
+
+
+class GitHub(HttpTransport):
+    def is_noop(self, status: str) -> bool:
+        return status != "down"
+
+    def notify(self, flip: Flip, notification: Notification) -> None:
+        if not settings.GITHUB_PRIVATE_KEY:
+            raise TransportError("GitHub notifications are not enabled.")
+
+        ping = self.last_ping(flip)
+        ctx = {
+            "flip": flip,
+            "check": flip.owner,
+            "status": flip.new_status,
+            "ping": ping,
+        }
+
+        body = get_ping_body(ping, maxlen=1000)
+        if body and "```" not in body:
+            ctx["body"] = body
+
+        url = f"https://api.github.com/repos/{self.channel.github.repo}/issues"
+        payload = {
+            "title": tmpl("github_title.html", **ctx),
+            "body": tmpl("github_body.html", **ctx),
+            "labels": self.channel.github.labels,
+        }
+
+        # Give up database connection before potentially long network IO:
+        close_old_connections()
+
+        inst_id = self.channel.github.installation_id
+        token = github.get_installation_access_token(inst_id)
+        headers = {"Authorization": f"Bearer {token}"}
+        self.post(url, json=payload, headers=headers)

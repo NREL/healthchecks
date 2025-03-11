@@ -68,7 +68,7 @@ class Spec(BaseModel):
     methods: Literal["", "POST"] | None = None
     name: str | None = Field(None, max_length=100)
     schedule: str | None = Field(None, max_length=100)
-    slug: str | None = Field(None, pattern="^[a-z0-9-_]*$")
+    slug: str | None = Field(None, max_length=100, pattern="^[a-z0-9-_]*$")
     start_kw: str | None = Field(None, max_length=200)
     subject: str | None = Field(None, max_length=200)
     subject_fail: str | None = Field(None, max_length=200)
@@ -86,7 +86,7 @@ class Spec(BaseModel):
         # strict validation, so this will cause type validation to fail.
         for k, v in data.items():
             if v is None:
-                data[k] = float()
+                data[k] = 0.0
         return data
 
     @field_validator("timeout", "grace", mode="before")
@@ -616,7 +616,11 @@ def ping_body(request: ApiRequest, code: UUID, n: int) -> HttpResponse:
         raise Http404()
 
     ping = get_object_or_404(Ping, owner=check, n=n)
-    body = ping.get_body_bytes()
+    try:
+        body = ping.get_body_bytes()
+    except Ping.GetBodyError:
+        return HttpResponse(status=503)
+
     if not body:
         raise Http404()
 

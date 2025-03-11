@@ -27,7 +27,7 @@ class CustomLDAPBackend(LDAPBackend):
 
         return user
 
-class BasicBackend(object):
+class BasicBackend:
     def get_user(self, user_id: int) -> User | None:
         try:
             q = User.objects.select_related("profile")

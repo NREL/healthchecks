@@ -15,7 +15,7 @@ The building blocks are:
 
 * Python 3.10+
 * Django 5.1
-* PostgreSQL or MySQL
+* PostgreSQL, MySQL or MariaDB
 
 Healthchecks is licensed under the BSD 3-clause license.
 
@@ -136,14 +136,25 @@ visit `http://localhost:8000/admin/`
 
 ## Configuration
 
-Healthchecks reads configuration from environment variables.
+Healthchecks reads configuration from environment variables. See the
+[full list of configuration parameters](https://healthchecks.io/docs/self_hosted_configuration/)
+you can set via environment variables.
 
-[Full list of configuration parameters](https://healthchecks.io/docs/self_hosted_configuration/).
+In addition, Healthchecks reads settings from the `hc/local_settings.py` file if it
+exists. You can set or override any [standard Django setting](https://docs.djangoproject.com/en/5.1/ref/settings/)
+in this file. You can copy the provided `hc/local_settings.py.example` as
+`hc/local_settings.py` and use it as a starting point.
+
+If a setting is specified both as environment variable and in `hc/local_settings.py`,
+the latter takes precedence.
 
 ## Accessing Administration Panel
 
-Healthchecks comes with Django's administration panel where you can manually
-view and modify user accounts, projects, checks, integrations etc. To access it,
+Healthchecks comes with Django's administration panel where you can perform
+administrative tasks: delete user accounts, change passwords, increase limits for
+specific users, inspect contents of database tables.
+
+To access the administration panel,
 
  * if you haven't already, create a superuser account: `./manage.py createsuperuser`
  * log into the site using superuser credentials
@@ -236,24 +247,17 @@ Run it with the `--loop` argument to make it run continuously:
 
 ## Database Cleanup
 
-Healthchecks deletes old entries from `api_ping` and `api_notification`
+Healthchecks deletes old entries from `api_ping`, `api_flip`, and `api_notification`
 tables automatically. By default, Healthchecks keeps the 100 most recent
 pings for every check. You can set the limit higher to keep a longer history:
 go to the Administration Panel, look up user's **Profile** and modify its
 "Ping log limit" field.
 
-For each check, Healthchecks removes notifications that are older than the
-oldest stored ping for same check.
-
 Healthchecks also provides management commands for cleaning up
-`auth_user`, `api_tokenbucket` and `api_flip` tables.
+`auth_user` (user accounts) and `api_tokenbucket` (rate limiting records) tables,
+and for removing stale objects from external object storage.
 
-* Remove user accounts that match either of these conditions:
-  * Account was created more than 6 months ago, and user has never logged in.
-   These can happen when user enters invalid email address when signing up.
-  * Last login was more than 6 months ago, and the account has no checks.
-   Assume the user doesn't intend to use the account any more and would
-   probably *want* it removed.
+* Remove user accounts that are older than 1 month and have never logged in:
 
   ```sh
   ./manage.py pruneusers
@@ -265,15 +269,6 @@ Healthchecks also provides management commands for cleaning up
 
   ```sh
   ./manage.py prunetokenbucket
-  ```
-
-* Remove old records from the `api_flip` table. The Flip
-  objects are used to track status changes of checks, and to calculate
-  downtime statistics month by month. Flip objects from more than 3 months
-  ago are not used and can be safely removed.
-
-  ```sh
-  ./manage.py pruneflips
   ```
 
 * Remove old objects from external object storage. When an user removes
@@ -327,6 +322,25 @@ When `REMOTE_USER_HEADER` is set, Healthchecks will:
  - look up and automatically log in the user with a matching email address
  - automatically create an user account if it does not exist
  - disable the default authentication methods (login link to email, password)
+
+The header name in `REMOTE_USER_HEADER` must be specified in upper-case,
+with any dashes replaced with underscores, and prefixed with `HTTP_`. For
+example, if your authentication proxy sets a `X-Authenticated-User` request
+header, you should set `REMOTE_USER_HEADER=HTTP_X_AUTHENTICATED_USER`.
+
+**Note on using `local_settings.py`:**
+When Healthchecks reads settings from environment variables and encounters
+the `REMOTE_USER_HEADER` environment variable, it sets *two* settings,
+`REMOTE_USER_HEADER` and `AUTHENTICATION_BACKENDS`. This logic has already run by the
+time Healthchecks reads `local_settings.py`. Therefore, if you configure Healthchecks
+using the `local_settings.py` file instead of environment variables, and specify
+`REMOTE_USER_HEADER` there, you will also need a line which sets the other setting,
+`AUTHENTICATION_BACKENDS`:
+
+```
+REMOTE_USER_HEADER = "HTTP_X_AUTHENTICATED_USER"
+AUTHENTICATION_BACKENDS = ["hc.accounts.backends.CustomHeaderBackend"]
+```
 
 ## External Object Storage
 
@@ -546,6 +560,8 @@ in production.
      **Do not use it in production**, instead consider using
      [uWSGI](https://uwsgi-docs.readthedocs.io/en/latest/) or
      [gunicorn](https://gunicorn.org/).
+     An example of a minimal setup would be to install uWSGI using `pip3 install uwsgi`,
+     and to run `uwsgi --http :8000 --module hc.wsgi` from the project's root directory.
   *  `manage.py sendalerts` is the process that monitors checks and sends out
      monitoring alerts. It must be always running, it must be started on reboot, and it
      must be restarted if it itself crashes. On modern linux systems, a good option is

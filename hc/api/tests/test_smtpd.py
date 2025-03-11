@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from unittest.mock import Mock
 
+from aiosmtpd.smtp import Envelope, Session
 from django.test.utils import override_settings
 
 from hc.api.management.commands.smtpd import PingHandler, _process_message
@@ -39,12 +40,17 @@ Content-Transfer-Encoding: 8bit
 """.strip()
 
 
-@override_settings(S3_BUCKET=None)
+class NullSink:
+    def write(self, text: str) -> None:
+        pass
+
+
+@override_settings(S3_BUCKET=None, PING_EMAIL_DOMAIN="hc.example.com")
 class SmtpdTestCase(BaseTestCase):
     def setUp(self) -> None:
         super().setUp()
         self.check = Check.objects.create(project=self.project)
-        self.email = "%s@does.not.matter" % self.check.code
+        self.email = f"{self.check.code}@hc.example.com"
 
     def test_it_works(self) -> None:
         _process_message("1.2.3.4", "foo@example.org", self.email, b"hello world")
@@ -197,20 +203,20 @@ class SmtpdTestCase(BaseTestCase):
         self.assertEqual(ping.kind, None)
 
     async def test_it_handles_multiple_recipients(self) -> None:
-        class Session:
-            peer = ["1.2.3.4"]
+        session = Session(loop=Mock())
+        # Session.peer appears to have an incorrect type annotation:
+        # https://github.com/aio-libs/aiosmtpd/issues/518
+        # If/when the type annotation gets fixed, we should be able to
+        # remove the type: ignore below
+        session.peer = ("1.2.3.4", 1234)  # type: ignore
 
-        class Envelope:
-            mail_from = "foo@example.org"
-            rcpt_tos = ["bar@example.org", self.email]
-            content = b"hello world"
-
-        class NullSink:
-            def write(self, text: str) -> None:
-                pass
+        envelope = Envelope()
+        envelope.mail_from = "foo@example.org"
+        envelope.rcpt_tos = ["bar@example.org", self.email]
+        envelope.content = b"hello world"
 
         handler = PingHandler(NullSink())
-        await handler.handle_DATA(Mock(), Session(), Envelope())
+        await handler.handle_DATA(Mock(), session, envelope)
 
         ping = await Ping.objects.alatest("id")
         self.assertEqual(ping.scheme, "email")
@@ -218,3 +224,17 @@ class SmtpdTestCase(BaseTestCase):
         assert ping.body_raw
         self.assertEqual(bytes(ping.body_raw), b"hello world")
         self.assertEqual(ping.kind, None)
+
+    async def test_it_rejects_non_uuid_mailboxes(self) -> None:
+        session = Session(loop=Mock())
+        handler = PingHandler(NullSink())
+        address = "foo@example.com"
+        result = await handler.handle_RCPT(Mock(), session, Envelope(), address, [])
+        self.assertTrue(result.startswith("550"))
+
+    async def test_it_rejects_wrong_domain(self) -> None:
+        session = Session(loop=Mock())
+        handler = PingHandler(NullSink())
+        address = f"{self.check.code}@bad.domain"
+        result = await handler.handle_RCPT(Mock(), session, Envelope(), address, [])
+        self.assertTrue(result.startswith("550"))

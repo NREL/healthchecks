@@ -1,5 +1,3 @@
-# coding: utf-8
-
 from __future__ import annotations
 
 import json
@@ -21,7 +19,7 @@ from hc.test import BaseTestCase
 Address = str | tuple[str, int]
 
 
-class MockSocket(object):
+class MockSocket:
     def __init__(
         self, response_tmpl: Any, side_effect: Exception | None = None
     ) -> None:
@@ -104,6 +102,7 @@ class NotifySignalTestCase(BaseTestCase):
         self.flip.created = now()
         self.flip.old_status = "new"
         self.flip.new_status = "down"
+        self.flip.reason = "timeout"
 
     def get_html(self, email: EmailMessage) -> str:
         assert isinstance(email, EmailMultiAlternatives)
@@ -127,6 +126,7 @@ class NotifySignalTestCase(BaseTestCase):
         params = socketobj.req["params"]
         self.assertIn("Daily Backup is DOWN", params["message"])
         self.assertEqual(params["textStyle"][0], "10:12:BOLD")
+        self.assertIn("grace time passed", params["message"])
 
         self.assertIn("Project: Alices Project", params["message"])
         self.assertIn("Tags: foo, bar", params["message"])
@@ -138,6 +138,17 @@ class NotifySignalTestCase(BaseTestCase):
         # Only one check in the project, so there should be no note about
         # other checks:
         self.assertNotIn("All the other checks are up.", params["message"])
+
+    @patch("hc.api.transports.socket.socket")
+    def test_it_handles_reason_fail(self, socket: Mock) -> None:
+        socketobj = setup_mock(socket, {})
+
+        self.flip.reason = "fail"
+        self.channel.notify(self.flip)
+
+        assert socketobj.req
+        params = socketobj.req["params"]
+        self.assertIn("received a failure signal", params["message"])
 
     @patch("hc.api.transports.socket.socket")
     def test_it_shows_exitstatus(self, socket: Mock) -> None:
@@ -363,6 +374,9 @@ class NotifySignalTestCase(BaseTestCase):
 
         self.channel.notify(self.flip)
 
+        # It should have tried one time:
+        self.assertEqual(socket.return_value.__enter__.call_count, 1)
+
         # It should disable the channel, so we don't attempt deliveries to
         # this recipient in the future
         self.channel.refresh_from_db()
@@ -406,7 +420,7 @@ class NotifySignalTestCase(BaseTestCase):
     @patch("hc.api.transports.logger")
     @patch("hc.api.transports.socket.socket")
     def test_it_handles_error_code(self, socket: Mock, logger: Mock) -> None:
-        setup_mock(socket, {"error": {"code": 123}})
+        setup_mock(socket, {"error": {"code": 123, "foo": "foobar"}})
 
         self.channel.notify(self.flip)
 
@@ -414,6 +428,11 @@ class NotifySignalTestCase(BaseTestCase):
         self.assertEqual(n.error, "signal-cli call failed (123)")
 
         self.assertTrue(logger.error.called)
+        # The log message should contain the full JSON message we received from
+        # signal-cli. This helps troubleshooting when we receive messages
+        # from signal-cli that we have not seen before.
+        message = logger.error.call_args[0][0]
+        self.assertIn("foobar", message)
 
     @patch("hc.api.transports.socket.socket")
     def test_it_handles_oserror(self, socket: Mock) -> None:
@@ -482,6 +501,9 @@ class NotifySignalTestCase(BaseTestCase):
 
         self.channel.notify(self.flip)
 
+        # It should have tried one time:
+        self.assertEqual(socket.return_value.__enter__.call_count, 1)
+
         n = Notification.objects.get()
         self.assertEqual(n.error, "CAPTCHA proof required")
 
@@ -495,15 +517,16 @@ class NotifySignalTestCase(BaseTestCase):
         email = emails["alice@example.org"]
         self.assertEqual(
             email.subject,
-            "Signal notification failed: The check Foo & Co is DOWN.",
+            "Signal notification failed: The check Foo & Co is DOWN"
+            " (success signal did not arrive on time, grace time passed).",
         )
         # The plaintext version should have no HTML markup, and should
         # have no &amp;, &lt; &gt; stuff:
-        self.assertIn("The check Foo & Co is DOWN.", email.body)
+        self.assertIn("The check Foo & Co is DOWN", email.body)
         # The HTML version should retain styling, and escape special characters
         # in project name, check name, etc.:
         html = self.get_html(email)
-        self.assertIn("The check <b>Foo &amp; Co</b> is <b>DOWN</b>.", html)
+        self.assertIn("The check <b>Foo &amp; Co</b> is <b>DOWN</b>", html)
 
     @patch("hc.api.transports.socket.socket")
     def test_it_handles_null_data(self, socket: Mock) -> None:
@@ -520,3 +543,44 @@ class NotifySignalTestCase(BaseTestCase):
 
         n = Notification.objects.get()
         self.assertEqual(n.error, "signal-cli call failed (-32602)")
+
+    @patch("hc.api.transports.socket.socket")
+    def test_it_retries_network_failure(self, socket: Mock) -> None:
+        msg = {
+            "error": {
+                "code": -1,
+                "message": "Failed to send message",
+                "data": {
+                    "response": {
+                        "results": [
+                            {
+                                "recipientAddress": {"number": "+123456789"},
+                                "type": "NETWORK_FAILURE",
+                            }
+                        ],
+                    }
+                },
+            },
+        }
+        setup_mock(socket, msg)
+
+        self.channel.notify(self.flip)
+
+        # It should have tried two times:
+        self.assertEqual(socket.return_value.__enter__.call_count, 2)
+        n = Notification.objects.get()
+
+        self.assertEqual(n.error, "signal-cli call failed (-1)")
+
+    @patch("hc.api.transports.socket.socket")
+    def test_it_handles_username(self, socket: Mock) -> None:
+        payload = {"value": "foobar.123", "up": True, "down": True}
+        self.channel.value = json.dumps(payload)
+        self.channel.save()
+
+        socketobj = setup_mock(socket, {})
+        self.channel.notify(self.flip)
+
+        assert socketobj.req
+        params = socketobj.req["params"]
+        self.assertEqual(params["recipient"], ["u:foobar.123"])

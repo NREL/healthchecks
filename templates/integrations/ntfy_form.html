@@ -27,6 +27,7 @@
                         id="topic"
                         name="topic"
                         type="text"
+                        maxlength="64"
                         class="form-control"
                         value="{{ form.topic.value|default:'' }}"
                         required>
@@ -50,6 +51,8 @@
 
                     {% if form.url.errors %}
                     <div class="help-block">{{ form.url.errors|join:"" }}</div>
+                    {% else %}
+                    <div class="help-block">ntfy server's root URL, <em>without</em> the topic name.</div>
                     {% endif %}
                 </div>
             </div>
