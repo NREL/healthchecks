@@ -23,11 +23,7 @@ WORKDIR /opt/healthchecks
 
 RUN \
     apt-get update && \
-<<<<<<< HEAD
-    apt-get install -y ca-certificates libcurl4 libpq5 libmariadb3 libxml2 && \
-=======
-    apt-get install -y libcurl4 libexpat1 libpq5 libmariadb3 libxml2 && \
->>>>>>> 1503ca479bff773a050d942671c3afbedd8b0fa1
+    apt-get install -y ca-certificates libcurl4 libexpat1 libpq5 libmariadb3 libxml2 && \
     rm -rf /var/apt/cache && \
     rm -rf /var/lib/apt/lists
 
